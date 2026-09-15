@@ -4,7 +4,7 @@ const process = require('node:process');
 const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
-  res.send('Status: ok!');
+  res.json({ message: 'Welcome to the Lost and Found Board API' });
 });
 
 app.listen(PORT, () => {
