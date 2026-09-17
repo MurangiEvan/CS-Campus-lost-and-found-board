@@ -11,8 +11,8 @@ const Item = {
     return rows[0];
   },
 
-  async findAll({ category, search }) {
-    let query = 'SELECT * FROM items WHERE status = \'active\'';
+  async findAll({ category, search, status, dateFrom, dateTo }) {
+    let query = 'SELECT * FROM items WHERE 1 = 1';
     const params = [];
     let paramCount = 1;
 
@@ -24,6 +24,21 @@ const Item = {
     if (search) {
       query += ` AND (title ILIKE $${paramCount++} OR description ILIKE $${paramCount++})`;
       params.push(`%${search}%`, `%${search}%`);
+    }
+
+    if (status && ['active', 'resolved'].includes(status)) {
+      query += ` AND status = $${paramCount++}`;
+      params.push(status);
+    }
+
+    if (dateFrom) {
+      query += ` AND date_event >= $${paramCount++}`;
+      params.push(dateFrom);
+    }
+
+    if (dateTo) {
+      query += ` AND date_event <= $${paramCount++}`;
+      params.push(dateTo);
     }
 
     query += ' ORDER BY created_at DESC;';
@@ -38,35 +53,18 @@ const Item = {
   },
 
   async update(id, updates, userId) {
-    const fields = [];
-    const params = [userId];
-    let paramCount = 2;
-
-    for (const [key, value] of Object.entries(updates)) {
-      fields.push(`${key} = $${paramCount++}`);
-      params.push(value);
-    }
-
-    const query = `
-      UPDATE items
-      SET ${fields.join(', ')}, updated_at = NOW()
-      WHERE id = $1 AND user_id = $2
-      RETURNING *;
-    `;
-    // Note: paramCount for id and userId. The query above uses $1 for id, but I passed userId first.
-    // Let's fix the param order.
-    return this._updateFixed(id, updates, userId);
-  },
-
-  async _updateFixed(id, updates, userId) {
+    const allowedFields = ['title', 'description', 'category', 'location', 'date_event', 'image_url', 'status'];
     const fields = [];
     const params = [];
     let paramCount = 1;
 
     for (const [key, value] of Object.entries(updates)) {
+      if (!allowedFields.includes(key)) continue;
       fields.push(`${key} = $${paramCount++}`);
       params.push(value);
     }
+
+    if (!fields.length) return null;
 
     params.push(id);
     const idParam = `$${paramCount++}`;

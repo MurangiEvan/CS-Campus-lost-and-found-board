@@ -30,8 +30,8 @@ const createItem = async (req, res, next) => {
 
 const getAllItems = async (req, res, next) => {
   try {
-    const { category, search } = req.query;
-    const items = await Item.findAll({ category, search });
+    const { category, search, status, date_from, date_to } = req.query;
+    const items = await Item.findAll({ category, search, status, dateFrom: date_from, dateTo: date_to });
     res.json(items);
   } catch (error) {
     next(error);
