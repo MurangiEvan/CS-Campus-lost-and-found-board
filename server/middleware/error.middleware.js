@@ -5,9 +5,8 @@ const errorMiddleware = (err, req, res, next) => {
   const message = err.message || 'Internal Server Error';
 
   res.status(status).json({
-    error: true,
+    error: message,
     status,
-    message,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 };

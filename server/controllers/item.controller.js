@@ -81,9 +81,9 @@ const deleteItem = async (req, res, next) => {
 const resolveItem = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const item = await Item.markAsResolved(id, req.user.id);
+    const item = await Item.markAsResolved(id, req.user.id, req.user.accountType || 'student');
     if (!item) {
-      return res.status(404).json({ error: 'Item not found or unauthorized' });
+      return res.status(403).json({ error: 'Forbidden: you cannot resolve this item' });
     }
     res.json(item);
   } catch (error) {

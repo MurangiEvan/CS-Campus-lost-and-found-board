@@ -87,9 +87,16 @@ const Item = {
     return rows[0];
   },
 
-  async markAsResolved(id, userId) {
-    const query = "UPDATE items SET status = 'resolved', updated_at = NOW() WHERE id = $1 AND user_id = $2 RETURNING *;";
-    const { rows } = await db.query(query, [id, userId]);
+  async markAsResolved(id, userId, accountType = 'student') {
+    let query = "UPDATE items SET status = 'resolved', updated_at = NOW() WHERE id = $1 RETURNING *;";
+    let params = [id];
+
+    if (accountType !== 'staff') {
+      query = "UPDATE items SET status = 'resolved', updated_at = NOW() WHERE id = $1 AND user_id = $2 RETURNING *;";
+      params = [id, userId];
+    }
+
+    const { rows } = await db.query(query, params);
     return rows[0];
   }
 };
