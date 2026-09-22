@@ -1,8 +1,9 @@
 ﻿"use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
-type ItemCategory = "lost" | "found";
+type ReportType = "lost" | "found";
+type ItemCategory = "cards" | "keys" | "phones" | "bags" | "other";
 type ItemStatus = "active" | "resolved";
 type View = "home" | "browse" | "reports" | "notifications" | "account";
 type AccountType = "student" | "staff";
@@ -19,12 +20,14 @@ type Item = {
   id: string;
   title: string;
   description: string;
-  category: ItemCategory;
+  category: ReportType;
+  item_category?: ItemCategory;
   location: string;
   date_event: string;
   status: ItemStatus;
   user_id?: string;
   reporter?: string;
+  image_url?: string | null;
 };
 
 type ContactPreferences = {
@@ -44,15 +47,18 @@ type ApiItem = {
   id: string;
   title: string;
   description: string;
-  category: ItemCategory;
+  category: ReportType;
+  item_category?: ItemCategory;
+  resolution_notes?: string | null;
   location: string;
   date_event: string;
   status: ItemStatus;
   user_id?: string;
+  image_url?: string | null;
 };
 
-const API_BASE = "http://localhost:3000/api/v1";
-const categoryIcon: Record<string, string> = { lost: "↗", found: "⌕" };
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000/api/v1";
+const categoryIcon: Record<string, string> = { lost: "↗", found: "⌕", cards: "▣", keys: "⌕", phones: "▤", bags: "□", other: "•" };
 const defaultContactPreferences: ContactPreferences = { emailUpdates: true, matchAlerts: true };
 
 function getStoredToken() {
@@ -84,6 +90,7 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T
   const token = getStoredToken();
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -100,6 +107,15 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T
   return data as T;
 }
 
+function readImage(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Unable to read image"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function mapApiItem(item: ApiItem): Item {
   return {
     ...item,
@@ -112,13 +128,20 @@ export default function Home() {
   const [items, setItems] = useState<Item[]>([]);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [showReport, setShowReport] = useState(false);
-  const [reportType, setReportType] = useState<ItemCategory>("lost");
+  const [reportType, setReportType] = useState<ReportType>("lost");
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"all" | ItemCategory>("all");
+  const [filter, setFilter] = useState<"all" | ReportType>("all");
+  const [itemCategory, setItemCategory] = useState<"all" | ItemCategory>("all");
+  const [showArchived, setShowArchived] = useState(false);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [location, setLocation] = useState("");
   const [user, setUser] = useState<User | null>(null);
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [itemsLoading, setItemsLoading] = useState(false);
+  const [browseItems, setBrowseItems] = useState<Item[]>([]);
+  const [browseLoading, setBrowseLoading] = useState(false);
   const [itemsError, setItemsError] = useState("");
   const [contactPreferences, setContactPreferences] = useState<ContactPreferences>(defaultContactPreferences);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -131,16 +154,19 @@ export default function Home() {
     }
     setContactPreferences(getStoredContactPreferences());
     setNotifications(getStoredNotifications());
+    void apiRequest<ContactPreferences>("/auth/preferences").then(setContactPreferences).catch(() => undefined);
   }, []);
 
   useEffect(() => {
     if (!user) return;
 
+    void apiRequest<ContactPreferences>("/auth/preferences").then(setContactPreferences).catch(() => undefined);
+
     const loadItems = async () => {
       setItemsLoading(true);
       setItemsError("");
       try {
-        const data = await apiRequest<ApiItem[]>("/items");
+        const data = await apiRequest<ApiItem[]>("/items?status=all");
         setItems(data.map(mapApiItem));
       } catch (error) {
         setItemsError(error instanceof Error ? error.message : "Unable to load items");
@@ -151,6 +177,31 @@ export default function Home() {
 
     void loadItems();
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams({ status: showArchived ? "resolved" : "active" });
+    if (search.trim()) params.set("search", search.trim());
+    if (filter !== "all") params.set("category", filter);
+    if (itemCategory !== "all") params.set("item_category", itemCategory);
+    if (dateFrom) params.set("date_from", dateFrom);
+    if (dateTo) params.set("date_to", dateTo);
+    if (location.trim()) params.set("location", location.trim());
+
+    const loadBrowseItems = async () => {
+      setBrowseLoading(true);
+      try {
+        const data = await apiRequest<ApiItem[]>(`/items?${params.toString()}`);
+        setBrowseItems(data.map(mapApiItem));
+      } catch (error) {
+        setItemsError(error instanceof Error ? error.message : "Unable to search items");
+      } finally {
+        setBrowseLoading(false);
+      }
+    };
+
+    void loadBrowseItems();
+  }, [dateFrom, dateTo, filter, itemCategory, location, search, showArchived, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -179,15 +230,14 @@ export default function Home() {
 
   useEffect(() => {
     localStorage.setItem("campuslink_contact_preferences", JSON.stringify(contactPreferences));
-  }, [contactPreferences]);
+    if (user) {
+      void apiRequest("/auth/preferences", { method: "PATCH", body: JSON.stringify(contactPreferences) }).catch(() => undefined);
+    }
+  }, [contactPreferences, user]);
 
-  const visibleItems = useMemo(() => items.filter((item) => {
-    const matchesType = filter === "all" || item.category === filter;
-    const query = search.toLowerCase();
-    return matchesType && (!query || `${item.title} ${item.description} ${item.location}`.toLowerCase().includes(query));
-  }), [filter, items, search]);
+  const visibleItems = browseItems;
 
-  function openReport(type: ItemCategory) {
+  function openReport(type: ReportType) {
     setReportType(type);
     setShowReport(true);
   }
@@ -197,14 +247,19 @@ export default function Home() {
     const data = new FormData(event.currentTarget);
 
     try {
+      const image = data.get("image");
+      const imageUrl = image instanceof File && image.size ? await readImage(image) : undefined;
+      if (imageUrl && imageUrl.length > 90000) throw new Error("Choose an image smaller than 65 KB");
       const item = await apiRequest<ApiItem>("/items", {
         method: "POST",
         body: JSON.stringify({
           title: String(data.get("title")),
           description: String(data.get("description")),
           category: reportType,
+          item_category: String(data.get("item_category") || "other"),
           location: String(data.get("location")),
           date_event: String(data.get("date_event")),
+          image_url: imageUrl,
         }),
       });
 
@@ -216,13 +271,34 @@ export default function Home() {
     }
   }
 
-  async function resolveItem(id: string) {
+  async function resolveItem(id: string, notes = "") {
     try {
-      const item = await apiRequest<ApiItem>(`/items/${id}/resolve`, { method: "PATCH" });
+      const item = await apiRequest<ApiItem>(`/items/${id}/resolve`, { method: "PATCH", body: JSON.stringify({ notes }) });
       setItems((current) => current.map((entry) => entry.id === id ? mapApiItem(item) : entry));
       setSelectedItem((current) => current && current.id === id ? mapApiItem(item) : current);
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to resolve the item");
+    }
+  }
+
+  async function deleteItem(id: string) {
+    try {
+      await apiRequest(`/items/${id}`, { method: "DELETE" });
+      setItems((current) => current.filter((item) => item.id !== id));
+      setSelectedItem(null);
+    } catch (error) {
+      setItemsError(error instanceof Error ? error.message : "Unable to delete the report");
+    }
+  }
+
+  async function updateItem(id: string, updates: { title: string; description: string; location: string; date_event: string }) {
+    try {
+      const item = await apiRequest<ApiItem>(`/items/${id}`, { method: "PATCH", body: JSON.stringify(updates) });
+      const mapped = mapApiItem(item);
+      setItems((current) => current.map((entry) => entry.id === id ? mapped : entry));
+      setSelectedItem(mapped);
+    } catch (error) {
+      setItemsError(error instanceof Error ? error.message : "Unable to update the report");
     }
   }
 
@@ -270,6 +346,7 @@ export default function Home() {
   }
 
   function logout() {
+    void apiRequest("/auth/logout", { method: "POST" }).catch(() => undefined);
     localStorage.removeItem("campuslink_token");
     localStorage.removeItem("campuslink_user");
     setUser(null);
@@ -309,7 +386,7 @@ export default function Home() {
       {itemsLoading && <div className="loading-banner">Loading items…</div>}
 
       {view === "home" && <HomeView items={items} onBrowse={() => setView("browse")} onReport={openReport} onSelect={setSelectedItem} />}
-      {view === "browse" && <BrowseView items={visibleItems} search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} onSelect={setSelectedItem} onReport={openReport} />}
+      {view === "browse" && <BrowseView items={visibleItems} search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} itemCategory={itemCategory} setItemCategory={setItemCategory} dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} location={location} setLocation={setLocation} showArchived={showArchived} setShowArchived={setShowArchived} loading={browseLoading} onSelect={setSelectedItem} onReport={openReport} />}
       {view === "reports" && <ReportsView items={items.filter((item) => item.user_id === user.id)} onSelect={setSelectedItem} onReport={openReport} />}
       {view === "notifications" && <NotificationsView notifications={notifications} />}
       {view === "account" && <AccountView user={user} items={items.filter((item) => item.user_id === user.id)} contactPreferences={contactPreferences} setContactPreferences={setContactPreferences} onBrowseReports={() => setView("reports")} />}
@@ -317,13 +394,13 @@ export default function Home() {
       <footer className="footer"><span>CampusLink</span><span>Lost and found, together.</span><button onClick={logout}>Sign out</button></footer>
 
       {showReport && <ReportModal type={reportType} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
-      {selectedItem && <ItemModal item={selectedItem} onClose={() => setSelectedItem(null)} onResolve={resolveItem} />}
+      {selectedItem && <ItemModal item={selectedItem} canManage={selectedItem.user_id === user.id} canResolve={selectedItem.user_id === user.id} onClose={() => setSelectedItem(null)} onResolve={resolveItem} onDelete={deleteItem} onUpdate={updateItem} />}
       {protocolOpen && <ProtocolModal onClose={() => setProtocolOpen(false)} />}
     </main>
   );
 }
 
-function HomeView({ items, onBrowse, onReport, onSelect }: { items: Item[]; onBrowse: () => void; onReport: (type: ItemCategory) => void; onSelect: (item: Item) => void }) {
+function HomeView({ items, onBrowse, onReport, onSelect }: { items: Item[]; onBrowse: () => void; onReport: (type: ReportType) => void; onSelect: (item: Item) => void }) {
   return <>
     <section className="hero"><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p className="hero-copy">A trusted board for reporting lost items, sharing found belongings, and getting them back to the right person.</p><div className="hero-actions"><button className="button dark" onClick={() => onReport("lost")}>Report lost item <span>→</span></button><button className="button gold" onClick={() => onReport("found")}>Report found item <span>+</span></button></div></div><div className="hero-note"><span>✦</span><p><strong>Built for campus.</strong><br />Every report helps our community look out for one another.</p></div></section>
     <section className="section"><div className="section-heading"><div><p className="eyebrow">LIVE BOARD</p><h2>Recent on campus</h2></div><button className="text-button" onClick={onBrowse}>View all <span>↗</span></button></div><div className="item-grid">{items.slice(0, 3).map((item) => <ItemCard key={item.id} item={item} onClick={() => onSelect(item)} />)}</div></section>
@@ -331,11 +408,11 @@ function HomeView({ items, onBrowse, onReport, onSelect }: { items: Item[]; onBr
   </>;
 }
 
-function BrowseView({ items, search, setSearch, filter, setFilter, onSelect, onReport }: { items: Item[]; search: string; setSearch: (value: string) => void; filter: "all" | ItemCategory; setFilter: (value: "all" | ItemCategory) => void; onSelect: (item: Item) => void; onReport: (type: ItemCategory) => void }) {
-  return <section className="page-section"><div className="page-intro"><p className="eyebrow">THE BOARD</p><h1>Browse items</h1><p>Search reports from across campus and help bring something home.</p></div><div className="toolbar"><label className="search"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by item, place, or detail" /></label><div className="filters"><button className={filter === "all" ? "selected" : ""} onClick={() => setFilter("all")}>All items</button><button className={filter === "lost" ? "selected" : ""} onClick={() => setFilter("lost")}>Lost</button><button className={filter === "found" ? "selected" : ""} onClick={() => setFilter("found")}>Found</button></div></div><div className="browse-layout"><div className="browse-list">{items.length ? items.map((item) => <ItemCard key={item.id} item={item} onClick={() => onSelect(item)} />) : <div className="empty-state"><span>⌕</span><h3>No matching reports</h3><p>Try a broader search or report the item yourself.</p></div>}</div><aside className="side-callout"><span className="callout-icon">+</span><h3>Have you found something?</h3><p>Small details can make a big difference. Add it to the board so its owner can find it.</p><button className="button gold" onClick={() => onReport("found")}>Report found item</button></aside></div></section>;
+function BrowseView({ items, search, setSearch, filter, setFilter, itemCategory, setItemCategory, dateFrom, setDateFrom, dateTo, setDateTo, location, setLocation, showArchived, setShowArchived, loading, onSelect, onReport }: { items: Item[]; search: string; setSearch: (value: string) => void; filter: "all" | ReportType; setFilter: (value: "all" | ReportType) => void; itemCategory: "all" | ItemCategory; setItemCategory: (value: "all" | ItemCategory) => void; dateFrom: string; setDateFrom: (value: string) => void; dateTo: string; setDateTo: (value: string) => void; location: string; setLocation: (value: string) => void; showArchived: boolean; setShowArchived: (value: boolean) => void; loading: boolean; onSelect: (item: Item) => void; onReport: (type: ReportType) => void }) {
+  return <section className="page-section"><div className="page-intro"><p className="eyebrow">THE BOARD</p><h1>{showArchived ? "Resolved history" : "Browse items"}</h1><p>Search reports from across campus and help bring something home.</p></div><div className="toolbar"><label className="search"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by item or detail" /></label><label>Building<input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Library, residence..." /></label><label>From<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label>To<input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label><div className="filters"><button className={filter === "all" ? "selected" : ""} onClick={() => setFilter("all")}>All</button><button className={filter === "lost" ? "selected" : ""} onClick={() => setFilter("lost")}>Lost</button><button className={filter === "found" ? "selected" : ""} onClick={() => setFilter("found")}>Found</button></div><div className="filters"><button className={itemCategory === "all" ? "selected" : ""} onClick={() => setItemCategory("all")}>All types</button>{(["cards", "keys", "phones", "bags"] as ItemCategory[]).map((value) => <button key={value} className={itemCategory === value ? "selected" : ""} onClick={() => setItemCategory(value)}>{value}</button>)}</div><button className="text-button" onClick={() => setShowArchived(!showArchived)}>{showArchived ? "Active reports" : "Resolved history"}</button></div><div className="browse-layout"><div className="browse-list">{loading ? <div className="empty-state"><h3>Searching reports...</h3></div> : items.length ? items.map((item) => <ItemCard key={item.id} item={item} onClick={() => onSelect(item)} />) : <div className="empty-state"><span>⌕</span><h3>No matching reports</h3><p>Try a broader search or report the item yourself.</p><button className="button gold" onClick={() => onReport("lost")}>Create a report</button></div>}</div><aside className="side-callout"><span className="callout-icon">+</span><h3>Have you found something?</h3><p>Small details can make a big difference. Add it to the board so its owner can find it.</p><button className="button gold" onClick={() => onReport("found")}>Report found item</button></aside></div></section>;
 }
 
-function ReportsView({ items, onSelect, onReport }: { items: Item[]; onSelect: (item: Item) => void; onReport: (type: ItemCategory) => void }) {
+function ReportsView({ items, onSelect, onReport }: { items: Item[]; onSelect: (item: Item) => void; onReport: (type: ReportType) => void }) {
   return <section className="page-section"><div className="page-intro reports-intro"><div><p className="eyebrow">YOUR ACTIVITY</p><h1>My reports</h1><p>Keep track of the items you have reported.</p></div><button className="button dark" onClick={() => onReport("lost")}>New report <span>+</span></button></div><div className="report-summary"><div><strong>{items.filter((item) => item.status === "active").length}</strong><span>Active</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div><div className="reports-list">{items.length ? items.map((item) => <ItemCard key={item.id} item={item} onClick={() => onSelect(item)} />) : <div className="empty-state"><h3>No reports yet</h3><p>Your lost or found reports will appear here.</p></div>}</div></section>;
 }
 
@@ -351,11 +428,11 @@ function AccountView({ user, items, contactPreferences, setContactPreferences, o
 
 function Notice({ icon, title, text, time, highlight = false }: { icon: string; title: string; text: string; time: string; highlight?: boolean }) { return <article className={`notice ${highlight ? "highlight" : ""}`}><span className="notice-icon">{icon}</span><div><strong>{title}</strong><p>{text}</p><small>{time}</small></div>{highlight && <b className="unread" />}</article>; }
 
-function ItemCard({ item, onClick }: { item: Item; onClick: () => void }) { return <button className="item-card" onClick={onClick}><span className="item-symbol">{categoryIcon[item.category]}</span><span className="item-content"><strong>{item.title}</strong><span>{item.location} <i>·</i> {formatDate(item.date_event)}</span></span><span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span></button>; }
+function ItemCard({ item, onClick }: { item: Item; onClick: () => void }) { return <button className="item-card" onClick={onClick}><span className="item-symbol">{categoryIcon[item.item_category || item.category]}</span><span className="item-content"><strong>{item.title}</strong><span>{item.location} <i>·</i> {formatDate(item.date_event)}</span></span><span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span></button>; }
 
-function ReportModal({ type, onClose, onSubmit }: { type: ItemCategory; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <div className="modal-backdrop"><form className="modal" onSubmit={onSubmit}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">NEW REPORT</p><h2>Report {type} item</h2><p className="modal-copy">Share a few details so the campus community can help.</p><label>Item name<input name="title" required placeholder={type === "lost" ? "e.g. Black iPhone 14" : "e.g. Brown leather wallet"} /></label><label>Description<textarea name="description" required placeholder="Include useful identifying details" /></label><label>{type === "lost" ? "Last seen location" : "Found at"}<input name="location" required placeholder="Building or area" /></label><label>Date {type === "lost" ? "lost" : "found"}<input name="date_event" type="date" required /></label><button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit">Submit {type} item report <span>→</span></button></form></div>; }
+function ReportModal({ type, onClose, onSubmit }: { type: ReportType; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <div className="modal-backdrop"><form className="modal" onSubmit={onSubmit}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">NEW REPORT</p><h2>Report {type} item</h2><p className="modal-copy">Share a few details so the campus community can help.</p><label>Item name<input name="title" required placeholder={type === "lost" ? "e.g. Black iPhone 14" : "e.g. Brown leather wallet"} /></label><label>Description<textarea name="description" required placeholder="Include useful identifying details" /></label><label>Item type<select name="item_category" defaultValue="other"><option value="cards">Cards</option><option value="keys">Keys</option><option value="phones">Phones</option><option value="bags">Bags</option><option value="other">Other</option></select></label><label>{type === "lost" ? "Last seen location" : "Found at"}<select name="location" required defaultValue=""><option value="" disabled>Select a campus location</option><option>Library</option><option>Campus Security Desk</option><option>Student Centre</option><option>Main Quad</option><option>Residence Hall</option><option>Dining Hall</option><option>Lecture Building</option></select></label><label>Date {type === "lost" ? "lost" : "found"}<input name="date_event" type="date" required /></label><label className="photo-input"><span>＋</span> Add a photo<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label><button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit">Submit {type} item report <span>→</span></button></form></div>; }
 
-function ItemModal({ item, onClose, onResolve }: { item: Item; onClose: () => void; onResolve: (id: string) => void }) { return <div className="modal-backdrop"><div className="modal detail-modal"><button className="close" onClick={onClose}>×</button><div className="detail-image">{categoryIcon[item.category]}</div><span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span><h2>{item.title}</h2><p className="detail-category">{item.category === "lost" ? "Lost item" : "Found item"} · Reported by {item.reporter || "Campus user"}</p><p>{item.description}</p><div className="detail-meta"><span>⌖ <b>Location</b> {item.location}</span><span>▣ <b>Date</b> {formatDate(item.date_event)}</span></div><p className="privacy-note">Bring your student card and proof of ownership to Campus Security.</p>{item.status === "active" && <button className="button dark" onClick={() => onResolve(item.id)}>Mark as resolved</button>}</div></div>; }
+function ItemModal({ item, canManage, canResolve, onClose, onResolve, onDelete, onUpdate }: { item: Item; canManage: boolean; canResolve: boolean; onClose: () => void; onResolve: (id: string, notes: string) => void; onDelete: (id: string) => void; onUpdate: (id: string, updates: { title: string; description: string; location: string; date_event: string }) => void }) { const [notes, setNotes] = useState(""); const [editing, setEditing] = useState(false); return <div className="modal-backdrop"><div className="modal detail-modal"><button className="close" onClick={onClose}>×</button>{item.image_url ? <img className="detail-image" src={item.image_url} alt={item.title} /> : <div className="detail-image">{categoryIcon[item.item_category || item.category]}</div>}<span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span>{editing ? <form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); onUpdate(item.id, { title: String(data.get("title")), description: String(data.get("description")), location: String(data.get("location")), date_event: String(data.get("date_event")) }); setEditing(false); }}><label>Title<input name="title" defaultValue={item.title} required /></label><label>Description<textarea name="description" defaultValue={item.description} required /></label><label>Location<input name="location" defaultValue={item.location} required /></label><label>Date<input name="date_event" type="date" defaultValue={item.date_event} required /></label><button className="button dark" type="submit">Save changes</button></form> : <><h2>{item.title}</h2><p className="detail-category">{item.category === "lost" ? "Lost item" : "Found item"} · Reported by {item.reporter || "Campus user"}</p><p>{item.description}</p><div className="detail-meta"><span>⌖ <b>Location</b> {item.location}</span><span>▣ <b>Date</b> {formatDate(item.date_event)}</span></div><p className="privacy-note">Bring your student card and proof of ownership to Campus Security.</p>{item.status === "active" && canResolve && <><label>Resolution notes (optional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="e.g. Returned via Security Desk" maxLength={1000} /></label><button className="button dark" onClick={() => onResolve(item.id, notes)}>Mark as resolved</button></>}{item.status === "active" && canManage && <div className="detail-actions"><button className="button gold" onClick={() => setEditing(true)}>Edit report</button><button className="text-button" onClick={() => onDelete(item.id)}>Delete report</button></div>}</>}</div></div>; }
 
 function ProtocolModal({ onClose }: { onClose: () => void }) {
   return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">SECURITY PROTOCOL</p><h2>Release checklist</h2><p className="modal-copy">Complete each check before releasing an item to a student.</p><ul className="protocol-list"><li>Verify the claimant matches the item description and campu s record.</li><li>Confirm proof of ownership or a valid student identification match.</li><li>Sign the release and note the responsible staff member for audit.</li><li>Mark the item as resolved only after collection is confirmed.</li></ul></div></div>;

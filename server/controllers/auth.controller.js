@@ -65,6 +65,13 @@ const login = async (req, res, next) => {
       { expiresIn: jwtExpiration }
     );
 
+    res.cookie('campuslink_session', token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
     res.json({
       message: 'Login successful',
       token,
@@ -75,4 +82,30 @@ const login = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login };
+const logout = (req, res) => {
+  res.clearCookie('campuslink_session', { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
+  res.json({ message: 'Logged out' });
+};
+
+const getPreferences = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+    res.json({ emailUpdates: user?.email_updates ?? true, matchAlerts: user?.match_alerts ?? true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updatePreferences = async (req, res, next) => {
+  try {
+    const preferences = await User.updatePreferences(req.user.id, {
+      emailUpdates: req.body.emailUpdates,
+      matchAlerts: req.body.matchAlerts,
+    });
+    res.json({ emailUpdates: preferences.email_updates, matchAlerts: preferences.match_alerts });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { register, login, logout, getPreferences, updatePreferences };

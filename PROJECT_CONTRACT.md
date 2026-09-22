@@ -49,18 +49,13 @@ Authorization must be enforced by the server, not only by hiding client controls
 - Client campus security dashboard.
 - Correct initials derived from the user's full name.
 
-### Known prototype limitations to be completed
+### Current implementation limitations
 
-- The client currently displays `initialItems` and stores newly submitted reports in React state; it does not yet load or create reports through the item API.
-- The client stores the JWT but does not yet send it with item API requests.
-- Notifications are static placeholder content.
-- Contact preferences are displayed but are not persisted in the database.
-- The optional image field is shown in the UI but is not uploaded or persisted by the client workflow.
-- Security's “Log found item” and “View protocol” controls are presentational placeholders.
-- The database has no notification, contact-preference, match, custody, or resolution-event tables.
-- There are no automated tests in the server package and no end-to-end test suite.
-
-These limitations are not considered complete product behavior until the relevant acceptance criteria below pass.
+- Notifications and contact preferences remain browser-backed prototypes rather than database-backed records.
+- Email OTP delivery requires a configured mail provider and is not enabled by default.
+- Image uploads are persisted as bounded data URLs in the item record; production cloud storage is not configured.
+- The security matching workflow remains a controlled queue rather than an automated match engine.
+- Vercel, Render, and Neon launch verification requires external provider credentials and a reachable production database.
 
 ## 5. Scope And Non-Goals
 
@@ -319,12 +314,12 @@ These limitations are not considered complete product behavior until the relevan
 | `GET` | `/health` | No | Service health check |
 | `POST` | `/api/v1/auth/register` | No | Register a student or staff user |
 | `POST` | `/api/v1/auth/login` | No | Authenticate by account type and identifier |
-| `GET` | `/api/v1/items` | Product decision | Browse/filter item reports |
+| `GET` | `/api/v1/items` | Product decision | Browse/filter item reports (`category`, `item_category`, `search`, `status`, `date_from`, `date_to`, `location`) |
 | `GET` | `/api/v1/items/:id` | Product decision | View one report |
 | `POST` | `/api/v1/items` | Yes | Create a report |
 | `PATCH` | `/api/v1/items/:id` | Yes, owner | Update a report |
 | `DELETE` | `/api/v1/items/:id` | Yes, owner | Delete a report |
-| `PATCH` | `/api/v1/items/:id/resolve` | Yes, policy-controlled | Resolve/release a report |
+| `PATCH` | `/api/v1/items/:id/resolve` | Yes, policy-controlled | Resolve/release a report with optional `notes` |
 
 Any change to request or response fields must update this contract and the implementation together.
 

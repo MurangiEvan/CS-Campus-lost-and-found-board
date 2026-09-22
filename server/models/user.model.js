@@ -25,8 +25,14 @@ const User = {
   },
 
   async findById(id) {
-    const query = 'SELECT id, username, email, created_at FROM users WHERE id = $1;';
+    const query = 'SELECT id, username, email, email_updates, match_alerts, created_at FROM users WHERE id = $1;';
     const { rows } = await db.query(query, [id]);
+    return rows[0];
+  },
+
+  async updatePreferences(id, { emailUpdates, matchAlerts }) {
+    const query = 'UPDATE users SET email_updates = $1, match_alerts = $2 WHERE id = $3 RETURNING email_updates, match_alerts;';
+    const { rows } = await db.query(query, [Boolean(emailUpdates), Boolean(matchAlerts), id]);
     return rows[0];
   },
 };

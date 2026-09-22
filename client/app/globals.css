@@ -1,6 +1,15 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600;1,700&display=swap');
 @import "tailwindcss";
 
+.ui-button { min-height: 42px; border: 0; border-radius: 8px; padding: 0 17px; background: var(--navy); color: #fff; font-weight: 600; }
+.ui-input, .ui-textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; outline-color: var(--blue); color: var(--ink); background: #fff; }
+.ui-textarea { min-height: 86px; resize: vertical; }
+.ui-badge { display: inline-flex; padding: 5px 10px; border-radius: 20px; background: var(--pale-blue); color: var(--blue); font-size: 11px; }
+.ui-badge.success { background: #e3f7ed; color: var(--green); }.ui-badge.warning { background: #fff1c9; color: #9a6900; }
+.ui-alert { padding: 11px; border-radius: 7px; background: #fff0f0; color: #b23737; font-size: 12px; }
+.detail-image { object-fit: cover; width: 100%; }
+.detail-actions { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+
 .account-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }.account-profile, .account-panel { background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 8px 24px #1d3a550d; }.account-profile { grid-column: 1 / -1; display: flex; align-items: center; gap: 17px; }.account-avatar { display: grid; place-items: center; flex: none; width: 62px; height: 62px; border-radius: 50%; background: var(--gold); color: var(--navy); font-size: 18px; font-weight: 700; }.account-profile h2 { font-size: 22px; margin-bottom: 5px; }.account-profile p, .account-number { color: var(--muted); font-size: 12px; margin-bottom: 5px; }.account-number { display: block; }.account-panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 15px; margin-bottom: 18px; }.account-panel-heading .eyebrow { margin-bottom: 7px; }.account-panel-heading h2 { font-size: 21px; }.account-panel-heading > strong { color: var(--blue); font-size: 27px; }.account-list { display: flex; flex-direction: column; gap: 10px; }.account-list .item-card { box-shadow: none; border-color: var(--line); }.account-empty { color: var(--muted); font-size: 13px; padding: 12px 0 4px; }.preference-state { color: var(--green); background: #e3f7ed; border-radius: 20px; padding: 6px 10px; font-size: 11px; }.preference-row { display: flex; justify-content: space-between; gap: 15px; padding: 14px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }.preference-row strong { color: var(--ink); font-weight: 600; text-align: right; }
 @media (max-width: 760px) { .account-layout { grid-template-columns: 1fr; }.account-profile { grid-column: auto; padding: 20px; }.account-panel { padding: 20px; } }
 .name-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }.form-success { color: var(--green); background: #e3f7ed; border-radius: 7px; padding: 11px; font-size: 12px; }

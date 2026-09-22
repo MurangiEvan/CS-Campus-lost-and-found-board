@@ -2,7 +2,7 @@ const Item = require('../models/item.model');
 
 const createItem = async (req, res, next) => {
   try {
-    const { title, description, category, location, date_event, image_url } = req.body;
+    const { title, description, category, item_category, location, date_event, image_url } = req.body;
 
     if (!title || !description || !category || !location || !date_event) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -12,10 +12,15 @@ const createItem = async (req, res, next) => {
       return res.status(400).json({ error: 'Category must be either "lost" or "found"' });
     }
 
+    if (item_category && !['cards', 'keys', 'phones', 'bags', 'other'].includes(item_category)) {
+      return res.status(400).json({ error: 'Invalid item category' });
+    }
+
     const item = await Item.create({
       title,
       description,
       category,
+      itemCategory: item_category || 'other',
       location,
       dateEvent: date_event,
       userId: req.user.id,
@@ -30,8 +35,8 @@ const createItem = async (req, res, next) => {
 
 const getAllItems = async (req, res, next) => {
   try {
-    const { category, search, status, date_from, date_to } = req.query;
-    const items = await Item.findAll({ category, search, status, dateFrom: date_from, dateTo: date_to });
+    const { category, item_category, search, status, date_from, date_to, location } = req.query;
+    const items = await Item.findAll({ category, itemCategory: item_category, search, status, dateFrom: date_from, dateTo: date_to, location });
     res.json(items);
   } catch (error) {
     next(error);
@@ -81,7 +86,8 @@ const deleteItem = async (req, res, next) => {
 const resolveItem = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const item = await Item.markAsResolved(id, req.user.id, req.user.accountType || 'student');
+    const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim().slice(0, 1000) : '';
+    const item = await Item.markAsResolved(id, req.user.id, req.user.accountType || 'student', notes);
     if (!item) {
       return res.status(403).json({ error: 'Forbidden: you cannot resolve this item' });
     }
