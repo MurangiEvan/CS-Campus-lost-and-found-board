@@ -1,4 +1,5 @@
-﻿"use client";
+﻿{activeItems.map((item) => <article className="custody-card" key={item.id}><span className="item-symbol">{categoryIcon[item.category]}</span><div><strong>{item.title}</strong><p>{item.location} · Received {formatDate(item.date_event)}</p><span className="status active">Awaiting collection</span></div><div className="custody-actions"><button onClick={() => onResolve(item.id)}>Release item</button><button onClick={() => { (window as any).__securityOpenUserSearch ? (window as any).__securityOpenUserSearch(item.id) : (() => { const newId = prompt('Reassign to user id (UUID):'); if (newId) onReassign(item.id, newId); })(); }}>Reassign</button></div></article>)}
+"use client";
 
 import { FormEvent, useEffect, useState } from "react";
 
@@ -57,7 +58,7 @@ type ApiItem = {
   image_url?: string | null;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000/api/v1";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || (typeof window !== "undefined" ? `${window.location.origin}/api/v1` : "http://localhost:3000/api/v1");
 const categoryIcon: Record<string, string> = { lost: "↗", found: "⌕", cards: "▣", keys: "⌕", phones: "▤", bags: "□", other: "•" };
 const defaultContactPreferences: ContactPreferences = { emailUpdates: true, matchAlerts: true };
 
@@ -146,6 +147,16 @@ export default function Home() {
   const [contactPreferences, setContactPreferences] = useState<ContactPreferences>(defaultContactPreferences);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [protocolOpen, setProtocolOpen] = useState(false);
+  const [resolutions, setResolutions] = useState<any[]>([]);
+  const [resolutionsLoading, setResolutionsLoading] = useState(false);
+  const [resolutionsOpen, setResolutionsOpen] = useState(false);
+  const [resolutionsError, setResolutionsError] = useState("");
+  const [userSearchOpen, setUserSearchOpen] = useState(false);
+  const [userSearchResults, setUserSearchResults] = useState<any[]>([]);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditEvents, setAuditEvents] = useState<any[]>([]);
+  const [selectedReassignItemId, setSelectedReassignItemId] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
   useEffect(() => {
     const storedUser = localStorage.getItem("campuslink_user");
@@ -187,20 +198,25 @@ export default function Home() {
     if (dateFrom) params.set("date_from", dateFrom);
     if (dateTo) params.set("date_to", dateTo);
     if (location.trim()) params.set("location", location.trim());
-
-    const loadBrowseItems = async () => {
-      setBrowseLoading(true);
+    // Debounce search/filter requests to avoid request storms
+    let cancelled = false;
+    setBrowseLoading(true);
+    const handle = setTimeout(async () => {
       try {
         const data = await apiRequest<ApiItem[]>(`/items?${params.toString()}`);
-        setBrowseItems(data.map(mapApiItem));
+        if (!cancelled) setBrowseItems(data.map(mapApiItem));
       } catch (error) {
-        setItemsError(error instanceof Error ? error.message : "Unable to search items");
+        if (!cancelled) setItemsError(error instanceof Error ? error.message : "Unable to search items");
       } finally {
-        setBrowseLoading(false);
+        if (!cancelled) setBrowseLoading(false);
       }
-    };
+    }, 300);
 
-    void loadBrowseItems();
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+      setBrowseLoading(false);
+    };
   }, [dateFrom, dateTo, filter, itemCategory, location, search, showArchived, user]);
 
   useEffect(() => {
@@ -242,10 +258,103 @@ export default function Home() {
     setShowReport(true);
   }
 
+  async function openResolutionsForItem(id: string) {
+    setResolutionsError("");
+    setResolutions([]);
+    setResolutionsLoading(true);
+    try {
+      const data = await apiRequest<any[]>(`/items/${id}/resolutions`);
+      setResolutions(data);
+      setResolutionsOpen(true);
+    } catch (error) {
+      setResolutionsError(error instanceof Error ? error.message : "Unable to load resolutions");
+    } finally {
+      setResolutionsLoading(false);
+    }
+  }
+
+  async function reassignItem(id: string, newUserId: string) {
+    try {
+      const item = await apiRequest<ApiItem>(`/items/${id}/reassign`, { method: 'PATCH', body: JSON.stringify({ user_id: newUserId }) });
+      setItems((current) => current.map((entry) => entry.id === id ? mapApiItem(item) : entry));
+    } catch (error) {
+      setItemsError(error instanceof Error ? error.message : 'Unable to reassign the item');
+    }
+  }
+
+  async function openUserSearch() {
+    setUserSearchResults([]);
+    setSelectedReassignItemId(null);
+    setUserSearchOpen(true);
+  }
+
+  async function performUserSearch(q: string) {
+    const results = await searchUsers(q);
+    setUserSearchResults(results);
+  }
+
+  async function openAudit() {
+    try {
+      const rows = await apiRequest<any[]>('/admin/audit');
+      setAuditEvents(rows);
+      setAuditOpen(true);
+    } catch {
+      setAuditEvents([]);
+      setAuditOpen(true);
+    }
+  }
+
+  // expose quick hooks for SecurityDashboard buttons
+  useEffect(() => {
+    (window as any).__securityOpenUserSearch = (itemId?: string) => { setSelectedReassignItemId(itemId || null); openUserSearch(); };
+    (window as any).__securityOpenAudit = openAudit;
+    return () => {
+      delete (window as any).__securityOpenUserSearch;
+      delete (window as any).__securityOpenAudit;
+    };
+  }, []);
+
+  // Modal components: user search and audit viewer
+  function UserSearchModal({ open, onClose, results, onSelect }: { open: boolean; onClose: () => void; results: any[]; onSelect: (id: string) => void }) {
+    const [query, setQuery] = useState('');
+    useEffect(() => {
+      const timer = setTimeout(() => {
+        if (query.length >= 2) void performUserSearch(query);
+      }, 250);
+      return () => clearTimeout(timer);
+    }, [query]);
+    if (!open) return null;
+    return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">FIND USER</p><h2>Search campus users</h2><label className="search"><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name, email, or number" /></label>{results.length ? <ul className="user-results">{results.map((u) => <li key={u.id}><strong>{u.username}</strong> <small>{u.email || u.student_number || u.staff_number}</small><button onClick={() => { onSelect(u.id); onClose(); }}>Select</button></li>)}</ul> : <p className="empty-state">No users</p>}<div className="modal-footer"><button className="button" onClick={() => onClose()}>Close</button></div></div></div>;
+  }
+
+  function AuditModal({ open, onClose, events }: { open: boolean; onClose: () => void; events: any[] }) {
+    if (!open) return null;
+    return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">AUDIT LOG</p><h2>Recent staff actions</h2>{events.length ? <ul className="audit-list">{events.map((e) => <li key={e.id}><strong>{e.action}</strong> by <small>{e.user_id}</small> — <code>{e.target_type}:{e.target_id}</code><br/><small>{new Date(e.created_at).toLocaleString()}</small></li>)}</ul> : <p className="empty-state">No audit events</p>}<div className="modal-footer"><button className="button" onClick={onClose}>Close</button></div></div></div>;
+  }
+
+  // User search helper for staff: use debounced lookup
+  async function searchUsers(query: string) {
+    if (!query || query.trim().length < 2) return [];
+    try {
+      const results = await apiRequest<any[]>(`/admin/users?q=${encodeURIComponent(query)}`);
+      return results;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // when a user is selected in the modal, call reassign for the selected item id
+  function handleUserSelect(userId: string) {
+    if (!selectedReassignItemId) return;
+    void reassignItem(selectedReassignItemId, userId);
+    setUserSearchOpen(false);
+  }
+
   async function submitReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
 
+    setActionLoading(true);
     try {
       const image = data.get("image");
       const imageUrl = image instanceof File && image.size ? await readImage(image) : undefined;
@@ -268,30 +377,39 @@ export default function Home() {
       setView("reports");
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to create the report");
+    } finally {
+      setActionLoading(false);
     }
   }
 
   async function resolveItem(id: string, notes = "") {
+    setActionLoading(true);
     try {
       const item = await apiRequest<ApiItem>(`/items/${id}/resolve`, { method: "PATCH", body: JSON.stringify({ notes }) });
       setItems((current) => current.map((entry) => entry.id === id ? mapApiItem(item) : entry));
       setSelectedItem((current) => current && current.id === id ? mapApiItem(item) : current);
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to resolve the item");
+    } finally {
+      setActionLoading(false);
     }
   }
 
   async function deleteItem(id: string) {
+    setActionLoading(true);
     try {
       await apiRequest(`/items/${id}`, { method: "DELETE" });
       setItems((current) => current.filter((item) => item.id !== id));
       setSelectedItem(null);
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to delete the report");
+    } finally {
+      setActionLoading(false);
     }
   }
 
   async function updateItem(id: string, updates: { title: string; description: string; location: string; date_event: string }) {
+    setActionLoading(true);
     try {
       const item = await apiRequest<ApiItem>(`/items/${id}`, { method: "PATCH", body: JSON.stringify(updates) });
       const mapped = mapApiItem(item);
@@ -299,6 +417,8 @@ export default function Home() {
       setSelectedItem(mapped);
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to update the report");
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -365,6 +485,8 @@ export default function Home() {
         onResolve={resolveItem}
         onLogFound={() => openReport("found")}
         onViewProtocol={() => setProtocolOpen(true)}
+        onReassign={reassignItem}
+        actionLoading={actionLoading}
       />
     );
   }
@@ -395,6 +517,9 @@ export default function Home() {
 
       {showReport && <ReportModal type={reportType} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
       {selectedItem && <ItemModal item={selectedItem} canManage={selectedItem.user_id === user.id} canResolve={selectedItem.user_id === user.id} onClose={() => setSelectedItem(null)} onResolve={resolveItem} onDelete={deleteItem} onUpdate={updateItem} />}
+      {resolutionsOpen && <ResolutionsModal open={resolutionsOpen} onClose={() => setResolutionsOpen(false)} resolutions={resolutions} loading={resolutionsLoading} error={resolutionsError} />}
+      {userSearchOpen && <UserSearchModal open={userSearchOpen} onClose={() => setUserSearchOpen(false)} results={userSearchResults} onSelect={handleUserSelect} />}
+      {auditOpen && <AuditModal open={auditOpen} onClose={() => setAuditOpen(false)} events={auditEvents} />}
       {protocolOpen && <ProtocolModal onClose={() => setProtocolOpen(false)} />}
     </main>
   );
@@ -433,6 +558,10 @@ function ItemCard({ item, onClick }: { item: Item; onClick: () => void }) { retu
 function ReportModal({ type, onClose, onSubmit }: { type: ReportType; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <div className="modal-backdrop"><form className="modal" onSubmit={onSubmit}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">NEW REPORT</p><h2>Report {type} item</h2><p className="modal-copy">Share a few details so the campus community can help.</p><label>Item name<input name="title" required placeholder={type === "lost" ? "e.g. Black iPhone 14" : "e.g. Brown leather wallet"} /></label><label>Description<textarea name="description" required placeholder="Include useful identifying details" /></label><label>Item type<select name="item_category" defaultValue="other"><option value="cards">Cards</option><option value="keys">Keys</option><option value="phones">Phones</option><option value="bags">Bags</option><option value="other">Other</option></select></label><label>{type === "lost" ? "Last seen location" : "Found at"}<select name="location" required defaultValue=""><option value="" disabled>Select a campus location</option><option>Library</option><option>Campus Security Desk</option><option>Student Centre</option><option>Main Quad</option><option>Residence Hall</option><option>Dining Hall</option><option>Lecture Building</option></select></label><label>Date {type === "lost" ? "lost" : "found"}<input name="date_event" type="date" required /></label><label className="photo-input"><span>＋</span> Add a photo<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label><button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit">Submit {type} item report <span>→</span></button></form></div>; }
 
 function ItemModal({ item, canManage, canResolve, onClose, onResolve, onDelete, onUpdate }: { item: Item; canManage: boolean; canResolve: boolean; onClose: () => void; onResolve: (id: string, notes: string) => void; onDelete: (id: string) => void; onUpdate: (id: string, updates: { title: string; description: string; location: string; date_event: string }) => void }) { const [notes, setNotes] = useState(""); const [editing, setEditing] = useState(false); return <div className="modal-backdrop"><div className="modal detail-modal"><button className="close" onClick={onClose}>×</button>{item.image_url ? <img className="detail-image" src={item.image_url} alt={item.title} /> : <div className="detail-image">{categoryIcon[item.item_category || item.category]}</div>}<span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span>{editing ? <form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); onUpdate(item.id, { title: String(data.get("title")), description: String(data.get("description")), location: String(data.get("location")), date_event: String(data.get("date_event")) }); setEditing(false); }}><label>Title<input name="title" defaultValue={item.title} required /></label><label>Description<textarea name="description" defaultValue={item.description} required /></label><label>Location<input name="location" defaultValue={item.location} required /></label><label>Date<input name="date_event" type="date" defaultValue={item.date_event} required /></label><button className="button dark" type="submit">Save changes</button></form> : <><h2>{item.title}</h2><p className="detail-category">{item.category === "lost" ? "Lost item" : "Found item"} · Reported by {item.reporter || "Campus user"}</p><p>{item.description}</p><div className="detail-meta"><span>⌖ <b>Location</b> {item.location}</span><span>▣ <b>Date</b> {formatDate(item.date_event)}</span></div><p className="privacy-note">Bring your student card and proof of ownership to Campus Security.</p>{item.status === "active" && canResolve && <><label>Resolution notes (optional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="e.g. Returned via Security Desk" maxLength={1000} /></label><button className="button dark" onClick={() => onResolve(item.id, notes)}>Mark as resolved</button></>}{item.status === "active" && canManage && <div className="detail-actions"><button className="button gold" onClick={() => setEditing(true)}>Edit report</button><button className="text-button" onClick={() => onDelete(item.id)}>Delete report</button></div>}</>}</div></div>; }
+  function ResolutionsModal({ open, onClose, resolutions, loading, error }: { open: boolean; onClose: () => void; resolutions: any[]; loading: boolean; error: string }) {
+    if (!open) return null;
+    return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">RESOLUTION HISTORY</p><h2>Item resolutions</h2>{loading ? <p>Loading…</p> : error ? <p className="error-message">{error}</p> : resolutions.length ? <ul>{resolutions.map((r) => <li key={r.id}><strong>{r.resolved_by}</strong> — {r.notes || "(no notes)"} <small>{new Date(r.created_at).toLocaleString()}</small></li>)}</ul> : <p>No resolution events found.</p>}</div></div>;
+  }
 
 function ProtocolModal({ onClose }: { onClose: () => void }) {
   return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">SECURITY PROTOCOL</p><h2>Release checklist</h2><p className="modal-copy">Complete each check before releasing an item to a student.</p><ul className="protocol-list"><li>Verify the claimant matches the item description and campu s record.</li><li>Confirm proof of ownership or a valid student identification match.</li><li>Sign the release and note the responsible staff member for audit.</li><li>Mark the item as resolved only after collection is confirmed.</li></ul></div></div>;
@@ -469,9 +598,9 @@ function LoginPage({ onLogin, onRegister, error, message }: { onLogin: (accountT
   return <main className="login-shell"><div className="login-art"><button className="brand" aria-label="CampusLink"><span>UF</span><strong>Campus<span>Link</span></strong></button><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p>A trusted board for the campus community.</p></div><small>Lost and found, together.</small></div><section className="login-panel"><div className="login-heading"><p className="eyebrow">{isRegistering ? "JOIN CAMPUSLINK" : "WELCOME BACK"}</p><h2>{isRegistering ? "Create your account" : "Sign in to CampusLink"}</h2><p>{isRegistering ? "Use your campus details to join the board." : "Use your campus credentials to continue."}</p></div><div className="account-switch"><button type="button" className={accountType === "student" ? "selected" : ""} onClick={() => setAccountType("student")}>Student</button><button type="button" className={accountType === "staff" ? "selected" : ""} onClick={() => setAccountType("staff")}>Campus Security</button></div><form onSubmit={submit} className="login-form">{isRegistering && <div className="name-fields"><label>Name<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="First name" autoComplete="given-name" /></label><label>Surname<input required value={surname} onChange={(event) => setSurname(event.target.value)} placeholder="Surname" autoComplete="family-name" /></label></div>}{isRegistering && <label>{accountType === "student" ? "Student email" : "Staff email"}<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@tut4life.ac.za" autoComplete="email" /></label>}<label>{accountType === "student" ? "Student number" : "Staff number"}<input required value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder={accountType === "student" ? "e.g. 202312345" : "e.g. SEC-001"} autoComplete={accountType === "student" ? "username" : "off"} /></label><label>Password<input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" autoComplete="current-password" /></label>{error && <p className="error-message">{error}</p>}{message && <p className="success-message">{message}</p>}<button type="submit" className="button dark" disabled={busy}>{busy ? "Please wait..." : isRegistering ? "Create account" : "Sign in"}</button><button type="button" className="text-button" onClick={() => setMode(isRegistering ? "login" : "register")}>{isRegistering ? "Already have an account? Sign in" : "Need an account? Create one"}</button></form></section></main>;
 }
 
-function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol }: { user: User; items: Item[]; onLogout: () => void; onResolve: (id: string) => void; onLogFound: () => void; onViewProtocol: () => void }) {
+function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol, onReassign }: { user: User; items: Item[]; onLogout: () => void; onResolve: (id: string) => void; onLogFound: () => void; onViewProtocol: () => void; onReassign: (id: string, userId: string) => void }) {
   const activeItems = items.filter((item) => item.status === "active");
-  return <main className="security-shell"><header className="security-header"><div><p className="eyebrow">CAMPUS SECURITY</p><h1>Good morning, {user.username}</h1><p>Custody and collection overview</p></div><div className="security-actions"><span className="security-avatar">{getInitials(user.username)}</span><button onClick={onLogout}>Sign out</button></div></header><section className="security-content"><div className="security-stats"><div><strong>{activeItems.length}</strong><span>In custody</span></div><div><strong>{items.filter((item) => item.category === "lost" && item.status === "active").length}</strong><span>Awaiting matches</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div><div className="security-title"><div><p className="eyebrow">TODAY&apos;S WORK QUEUE</p><h2>Manage items</h2></div><button className="button gold" onClick={onLogFound}>+ Log found item</button></div><div className="security-layout"><div className="custody-list">{activeItems.map((item) => <article className="custody-card" key={item.id}><span className="item-symbol">{categoryIcon[item.category]}</span><div><strong>{item.title}</strong><p>{item.location} · Received {formatDate(item.date_event)}</p><span className="status active">Awaiting collection</span></div><button onClick={() => onResolve(item.id)}>Release item</button></article>)}</div><aside className="security-note"><span>✓</span><h3>Release checklist</h3><p>Verify student ID, proof of ownership, and item condition before releasing an item.</p><button className="text-button" onClick={onViewProtocol}>View protocol ↗</button></aside></div></section></main>;
+  return <main className="security-shell"><header className="security-header"><div><p className="eyebrow">CAMPUS SECURITY</p><h1>Good morning, {user.username}</h1><p>Custody and collection overview</p></div><div className="security-actions"><span className="security-avatar">{getInitials(user.username)}</span><button onClick={onLogout}>Sign out</button></div></header><section className="security-content"><div className="security-stats"><div><strong>{activeItems.length}</strong><span>In custody</span></div><div><strong>{items.filter((item) => item.category === "lost" && item.status === "active").length}</strong><span>Awaiting matches</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div><div className="security-title"><div><p className="eyebrow">TODAY&apos;S WORK QUEUE</p><h2>Manage items</h2></div><div className="security-actions"><button className="button gold" onClick={onLogFound}>+ Log found item</button><button className="text-button" onClick={() => (window as any).__securityOpenUserSearch && (window as any).__securityOpenUserSearch()}>Find user</button><button className="text-button" onClick={() => (window as any).__securityOpenAudit && (window as any).__securityOpenAudit()}>View audit</button></div></div><div className="security-layout"><div className="custody-list">{activeItems.map((item) => <article className="custody-card" key={item.id}><span className="item-symbol">{categoryIcon[item.category]}</span><div><strong>{item.title}</strong><p>{item.location} · Received {formatDate(item.date_event)}</p><span className="status active">Awaiting collection</span></div><div className="custody-actions"><button onClick={() => onResolve(item.id)}>Release item</button><button onClick={() => { const newId = prompt('Reassign to user id (UUID):'); if (newId) onReassign(item.id, newId); }}>Reassign</button></div></article>)}</div><aside className="security-note"><span>✓</span><h3>Release checklist</h3><p>Verify student ID, proof of ownership, and item condition before releasing an item.</p><button className="text-button" onClick={onViewProtocol}>View protocol ↗</button></aside></div></section></main>;
 }
 
 function getInitials(name: string) {

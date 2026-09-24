@@ -5,11 +5,13 @@ const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 const authRoutes = require('./routes/auth.routes');
 const itemRoutes = require('./routes/item.routes');
+const adminRoutes = require('./routes/admin.routes');
 const { errorMiddleware } = require('./middleware/error.middleware');
 const db = require('./config/db');
 
 const app = express();
-const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3001,http://localhost:3002').split(',').map((origin) => origin.trim()).filter(Boolean);
+const rawCors = process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3001,http://localhost:3002';
+const allowedOrigins = rawCors.split(',').map((origin) => origin.trim()).filter(Boolean);
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false });
 const mutationLimiter = rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false });
 
@@ -17,10 +19,31 @@ const mutationLimiter = rateLimit({ windowMs: 60 * 1000, limit: 120, standardHea
 app.use(helmet());
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Allow non-browser requests (e.g. curl, server-side) with no origin
+    if (!origin) {
       callback(null, true);
       return;
     }
+
+    // Exact match whitelist
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    // Support suffix patterns in CORS_ORIGINS, e.g. ".vercel.app" or ".onrender.com"
+    const suffixes = allowedOrigins.filter((o) => o.startsWith('.'));
+    if (suffixes.some((suf) => origin.endsWith(suf))) {
+      callback(null, true);
+      return;
+    }
+
+    // Support wildcard '*' in the list to allow any origin (use with caution)
+    if (allowedOrigins.includes('*')) {
+      callback(null, true);
+      return;
+    }
+
     callback(new Error('CORS policy does not allow this origin'));
   },
   credentials: true,
@@ -32,6 +55,7 @@ app.use(express.urlencoded({ extended: true }));
 // Routes
 app.use('/api/v1/auth', authLimiter, authRoutes);
 app.use('/api/v1/items', mutationLimiter, itemRoutes);
+app.use('/api/v1/admin', adminRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

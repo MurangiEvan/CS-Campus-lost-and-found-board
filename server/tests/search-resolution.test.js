@@ -76,3 +76,22 @@ test('passes search and filter parameters to the item model', async () => {
     Item.findAll = original;
   }
 });
+
+test('returns resolution events for an item', async () => {
+  const original = Item.getResolutions;
+  let receivedId = null;
+  Item.getResolutions = async (itemId) => {
+    receivedId = itemId;
+    return [ { id: 'res-1', item_id: itemId, resolved_by: 'staff-1', notes: 'Test', created_at: '2026-09-22T00:00:00Z' } ];
+  };
+
+  try {
+    const res = buildRes();
+    await itemController.getResolutions({ params: { id: 'item-123' }, user: { id: 'staff-1' } }, res, () => { throw new Error('next should not be called'); });
+    assert.equal(receivedId, 'item-123');
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.payload, [ { id: 'res-1', item_id: 'item-123', resolved_by: 'staff-1', notes: 'Test', created_at: '2026-09-22T00:00:00Z' } ]);
+  } finally {
+    Item.getResolutions = original;
+  }
+});

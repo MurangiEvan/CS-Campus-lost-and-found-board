@@ -36,7 +36,9 @@ const createItem = async (req, res, next) => {
 const getAllItems = async (req, res, next) => {
   try {
     const { category, item_category, search, status, date_from, date_to, location } = req.query;
-    const items = await Item.findAll({ category, itemCategory: item_category, search, status, dateFrom: date_from, dateTo: date_to, location });
+    // Staff may request all items including ownership details
+    const includeOwner = req.user && req.user.accountType === 'staff';
+    const items = await Item.findAll({ category, itemCategory: item_category, search, status, dateFrom: date_from, dateTo: date_to, location, includeOwner });
     res.json(items);
   } catch (error) {
     next(error);
@@ -91,6 +93,42 @@ const resolveItem = async (req, res, next) => {
     if (!item) {
       return res.status(403).json({ error: 'Forbidden: you cannot resolve this item' });
     }
+    try {
+      const { recordAudit } = require('./admin.controller');
+      await recordAudit(req.user.id, 'resolve_item', 'item', id, { notes: notes || null });
+    } catch (e) {
+      // ignore
+    }
+    res.json(item);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getResolutions = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const resolutions = await Item.getResolutions(id);
+    res.json(resolutions);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const reassignItem = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { user_id } = req.body;
+    if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+    const item = await Item.reassign(id, user_id);
+    if (!item) return res.status(404).json({ error: 'Item not found' });
+    // Record audit
+    try {
+      const { recordAudit } = require('./admin.controller');
+      await recordAudit(req.user.id, 'reassign_item', 'item', id, { new_user: user_id });
+    } catch (e) {
+      // non-fatal
+    }
     res.json(item);
   } catch (error) {
     next(error);
@@ -104,4 +142,6 @@ module.exports = {
   updateItem,
   deleteItem,
   resolveItem,
+  getResolutions,
+  reassignItem,
 };

@@ -63,6 +63,17 @@ CREATE TABLE IF NOT EXISTS resolution_events (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Audit events for staff actions
+CREATE TABLE IF NOT EXISTS audit_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id),
+    action VARCHAR(100) NOT NULL,
+    target_type VARCHAR(50),
+    target_id UUID,
+    details JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indices for performance
 CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);
 CREATE INDEX IF NOT EXISTS idx_items_item_category ON items(item_category);
@@ -71,3 +82,9 @@ CREATE INDEX IF NOT EXISTS idx_items_user ON items(user_id);
 CREATE INDEX IF NOT EXISTS idx_items_date_event ON items(date_event);
 CREATE INDEX IF NOT EXISTS idx_items_location ON items(location);
 CREATE INDEX IF NOT EXISTS idx_items_search ON items USING GIN (to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(description, '')));
+
+-- Add a stored tsvector column for faster full-text search and index it.
+ALTER TABLE items ADD COLUMN IF NOT EXISTS search_vector tsvector GENERATED ALWAYS AS (
+    to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(description, ''))
+) STORED;
+CREATE INDEX IF NOT EXISTS idx_items_search_vector ON items USING GIN (search_vector);
