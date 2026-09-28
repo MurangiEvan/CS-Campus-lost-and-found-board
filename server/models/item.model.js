@@ -11,8 +11,13 @@ const Item = {
     return rows[0];
   },
 
-  async findAll({ category, itemCategory, search, status = 'active', dateFrom, dateTo, location }) {
-    let query = 'SELECT * FROM items WHERE 1 = 1';
+  async findAll({ category, itemCategory, search, status = 'active', dateFrom, dateTo, location, includeOwner = false }) {
+    let select = 'SELECT items.*';
+    if (includeOwner) select += ', users.username AS owner_name, users.email AS owner_email, users.student_number, users.staff_number';
+    let query = `${select} FROM items`;
+    if (includeOwner) query += ' LEFT JOIN users ON users.id = items.user_id';
+    // start a predictable WHERE clause so subsequent ANDs work
+    query += ' WHERE 1 = 1';
     const params = [];
     let paramCount = 1;
 
@@ -27,7 +32,8 @@ const Item = {
     }
 
     if (search) {
-      query += ` AND to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(description, '')) @@ plainto_tsquery('simple', $${paramCount++})`;
+      // Use stored search_vector if available
+      query += ` AND (search_vector @@ plainto_tsquery('simple', $${paramCount++}) OR to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(description, '')) @@ plainto_tsquery('simple', $${paramCount - 1}))`;
       params.push(search);
     }
 
@@ -51,9 +57,16 @@ const Item = {
       params.push(`%${location}%`);
     }
 
+    // Optionally include owner contact info when requested by staff
     query += ' ORDER BY created_at DESC;';
     const { rows } = await db.query(query, params);
     return rows;
+  },
+
+  async reassign(id, newUserId) {
+    const query = 'UPDATE items SET user_id = $1, updated_at = NOW() WHERE id = $2 RETURNING *;';
+    const { rows } = await db.query(query, [newUserId, id]);
+    return rows[0];
   },
 
   async findById(id) {
@@ -118,6 +131,14 @@ const Item = {
       client.release();
     }
   }
+
+  ,
+
+  async getResolutions(itemId) {
+    const query = 'SELECT id, item_id, resolved_by, notes, created_at FROM resolution_events WHERE item_id = $1 ORDER BY created_at DESC;';
+    const { rows } = await db.query(query, [itemId]);
+    return rows;
+  },
 };
 
 module.exports = Item;

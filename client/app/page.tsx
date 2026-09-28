@@ -143,12 +143,30 @@ export default function Home() {
   const [authResetMessage, setAuthResetMessage] = useState("");
   const [contactPreferences, setContactPreferences] = useState<ContactPreferences>(defaultContactPreferences);
   const [protocolOpen, setProtocolOpen] = useState(false);
+  const [resolutions, setResolutions] = useState<any[]>([]);
+  const [resolutionsLoading, setResolutionsLoading] = useState(false);
+  const [resolutionsOpen, setResolutionsOpen] = useState(false);
+  const [resolutionsError, setResolutionsError] = useState("");
+  const [userSearchOpen, setUserSearchOpen] = useState(false);
+  const [userSearchResults, setUserSearchResults] = useState<any[]>([]);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditEvents, setAuditEvents] = useState<any[]>([]);
+  const [selectedReassignItemId, setSelectedReassignItemId] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
   function navigateToView(nextView: View) {
     if (user) router.push(nextView === "home" ? "/app" : `/app/${nextView}`);
   }
 
   useEffect(() => {
+    const token = getStoredToken();
+    if (!token) {
+      localStorage.removeItem("campuslink_user");
+      setUser(null);
+      setAuthChecking(false);
+      return;
+    }
+
     void apiRequest<User>("/auth/session", {}, false)
       .then((sessionUser) => {
         setUser(sessionUser);
@@ -200,7 +218,7 @@ export default function Home() {
     const loadBrowseItems = async () => {
       setBrowseLoading(true);
       try {
-        const data = await apiRequest<ApiItem[]>(`/items?${params.toString()}`);
+        const data = await apiRequest<ApiItem[]>(`/items?${paramsFilter.toString()}`);
         setBrowseItems(data.map(mapApiItem));
       } catch (error) {
         setItemsError(error instanceof Error ? error.message : "Unable to search items");
@@ -209,8 +227,12 @@ export default function Home() {
       }
     };
 
-    void loadBrowseItems();
-  }, [dateFrom, dateTo, filter, itemCategory, location, search, showArchived, user]);
+    const timeout = window.setTimeout(() => {
+      void loadBrowseItems();
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [dateFrom, dateTo, filter, itemCategory, location, search, showArchived, user, router]);
 
   const notifications: NotificationItem[] = user ? [
       ...items.filter((item) => item.user_id === user.id && item.status === "resolved").slice(0, 2).map((item) => ({
@@ -243,10 +265,103 @@ export default function Home() {
     setShowReport(true);
   }
 
+  async function openResolutionsForItem(id: string) {
+    setResolutionsError("");
+    setResolutions([]);
+    setResolutionsLoading(true);
+    try {
+      const data = await apiRequest<any[]>(`/items/${id}/resolutions`);
+      setResolutions(data);
+      setResolutionsOpen(true);
+    } catch (error) {
+      setResolutionsError(error instanceof Error ? error.message : "Unable to load resolutions");
+    } finally {
+      setResolutionsLoading(false);
+    }
+  }
+
+  async function reassignItem(id: string, newUserId: string) {
+    try {
+      const item = await apiRequest<ApiItem>(`/items/${id}/reassign`, { method: 'PATCH', body: JSON.stringify({ user_id: newUserId }) });
+      setItems((current) => current.map((entry) => entry.id === id ? mapApiItem(item) : entry));
+    } catch (error) {
+      setItemsError(error instanceof Error ? error.message : 'Unable to reassign the item');
+    }
+  }
+
+  async function openUserSearch() {
+    setUserSearchResults([]);
+    setSelectedReassignItemId(null);
+    setUserSearchOpen(true);
+  }
+
+  async function performUserSearch(q: string) {
+    const results = await searchUsers(q);
+    setUserSearchResults(results);
+  }
+
+  async function openAudit() {
+    try {
+      const rows = await apiRequest<any[]>('/admin/audit');
+      setAuditEvents(rows);
+      setAuditOpen(true);
+    } catch {
+      setAuditEvents([]);
+      setAuditOpen(true);
+    }
+  }
+
+  // expose quick hooks for SecurityDashboard buttons
+  useEffect(() => {
+    (window as any).__securityOpenUserSearch = (itemId?: string) => { setSelectedReassignItemId(itemId || null); openUserSearch(); };
+    (window as any).__securityOpenAudit = openAudit;
+    return () => {
+      delete (window as any).__securityOpenUserSearch;
+      delete (window as any).__securityOpenAudit;
+    };
+  }, []);
+
+  // Modal components: user search and audit viewer
+  function UserSearchModal({ open, onClose, results, onSelect }: { open: boolean; onClose: () => void; results: any[]; onSelect: (id: string) => void }) {
+    const [query, setQuery] = useState('');
+    useEffect(() => {
+      const timer = setTimeout(() => {
+        if (query.length >= 2) void performUserSearch(query);
+      }, 250);
+      return () => clearTimeout(timer);
+    }, [query]);
+    if (!open) return null;
+    return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">FIND USER</p><h2>Search campus users</h2><label className="search"><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name, email, or number" /></label>{results.length ? <ul className="user-results">{results.map((u) => <li key={u.id}><strong>{u.username}</strong> <small>{u.email || u.student_number || u.staff_number}</small><button onClick={() => { onSelect(u.id); onClose(); }}>Select</button></li>)}</ul> : <p className="empty-state">No users</p>}<div className="modal-footer"><button className="button" onClick={() => onClose()}>Close</button></div></div></div>;
+  }
+
+  function AuditModal({ open, onClose, events }: { open: boolean; onClose: () => void; events: any[] }) {
+    if (!open) return null;
+    return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">AUDIT LOG</p><h2>Recent staff actions</h2>{events.length ? <ul className="audit-list">{events.map((e) => <li key={e.id}><strong>{e.action}</strong> by <small>{e.user_id}</small> — <code>{e.target_type}:{e.target_id}</code><br/><small>{new Date(e.created_at).toLocaleString()}</small></li>)}</ul> : <p className="empty-state">No audit events</p>}<div className="modal-footer"><button className="button" onClick={onClose}>Close</button></div></div></div>;
+  }
+
+  // User search helper for staff: use debounced lookup
+  async function searchUsers(query: string) {
+    if (!query || query.trim().length < 2) return [];
+    try {
+      const results = await apiRequest<any[]>(`/admin/users?q=${encodeURIComponent(query)}`);
+      return results;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // when a user is selected in the modal, call reassign for the selected item id
+  function handleUserSelect(userId: string) {
+    if (!selectedReassignItemId) return;
+    void reassignItem(selectedReassignItemId, userId);
+    setUserSearchOpen(false);
+  }
+
   async function submitReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
 
+    setActionLoading(true);
     try {
       const image = data.get("image");
       const imageUrl = image instanceof File && image.size ? await readImage(image) : undefined;
@@ -269,6 +384,8 @@ export default function Home() {
       navigateToView("reports");
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to create the report");
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -297,16 +414,20 @@ export default function Home() {
   }
 
   async function deleteItem(id: string) {
+    setActionLoading(true);
     try {
       await apiRequest(`/items/${id}`, { method: "DELETE" });
       setItems((current) => current.filter((item) => item.id !== id));
       setSelectedItem(null);
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to delete the report");
+    } finally {
+      setActionLoading(false);
     }
   }
 
   async function updateItem(id: string, updates: { title: string; description: string; location: string; date_event: string }) {
+    setActionLoading(true);
     try {
       const item = await apiRequest<ApiItem>(`/items/${id}`, { method: "PATCH", body: JSON.stringify(updates) });
       const mapped = mapApiItem(item);
@@ -314,6 +435,8 @@ export default function Home() {
       setSelectedItem(mapped);
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to update the report");
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -428,6 +551,8 @@ export default function Home() {
         onResolve={requestResolution}
         onLogFound={() => openReport("found")}
         onViewProtocol={() => setProtocolOpen(true)}
+        onReassign={reassignItem}
+        actionLoading={actionLoading}
       />
     );
   }
@@ -500,9 +625,7 @@ function ItemModal({ item, canManage, canResolve, onClose, onResolve, onDelete, 
 
 function ResolutionModal({ item, notes, setNotes, busy, error, onClose, onConfirm }: { item: Item; notes: string; setNotes: (value: string) => void; busy: boolean; error: string; onClose: () => void; onConfirm: () => void }) {
   return <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="resolution-title"><button className="close" onClick={onClose} disabled={busy} aria-label="Close">×</button><p className="eyebrow">CONFIRM COLLECTION</p><h2 id="resolution-title">Release {item.title}?</h2><p className="modal-copy">Confirm the item has been returned to its owner. This will move the report to resolved history.</p><label>Resolution notes (optional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="e.g. Collected at the Security Desk" maxLength={1000} /></label>{error && <p className="form-error" role="alert">{error}</p>}<div className="detail-actions"><button className="button dark" onClick={onConfirm} disabled={busy}>{busy ? "Saving…" : "Confirm release"}</button><button className="text-button" onClick={onClose} disabled={busy}>Cancel</button></div></section></div>;
-}
-
-function ProtocolModal({ onClose }: { onClose: () => void }) {
+}function ProtocolModal({ onClose }: { onClose: () => void }) {
   return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">SECURITY PROTOCOL</p><h2>Release checklist</h2><p className="modal-copy">Complete each check before releasing an item to a student.</p><ul className="protocol-list"><li>Verify the claimant matches the item description and campu s record.</li><li>Confirm proof of ownership or a valid student identification match.</li><li>Sign the release and note the responsible staff member for audit.</li><li>Mark the item as resolved only after collection is confirmed.</li></ul></div></div>;
 }
 
@@ -545,10 +668,9 @@ function LoginPage({ onLogin, onRegister, error, message, onForgot }: { onLogin:
   return <main className="login-shell"><div className="login-art"><button className="brand" aria-label="CampusLink"><span>UF</span><strong>Campus<span>Link</span></strong></button><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p>A trusted board for the campus community.</p></div><small>Lost and found, together.</small></div><section className="login-panel"><div className="login-heading"><p className="eyebrow">{isRegistering ? "JOIN CAMPUSLINK" : "WELCOME BACK"}</p><h2>{isRegistering ? "Create your account" : "Sign in to CampusLink"}</h2><p>{isRegistering ? "Use your campus details to join the board." : "Use your campus credentials to continue."}</p></div><div className="account-switch"><button type="button" className={accountType === "student" ? "selected" : ""} onClick={() => setAccountType("student")}>Student</button><button type="button" className={accountType === "staff" ? "selected" : ""} onClick={() => setAccountType("staff")}>Campus Security</button></div><form onSubmit={submit} className="login-form">{isRegistering && <div className="name-fields"><label>Name<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="First name" autoComplete="given-name" /></label><label>Surname<input required value={surname} onChange={(event) => setSurname(event.target.value)} placeholder="Surname" autoComplete="family-name" /></label></div>}{isRegistering && <label>{accountType === "student" ? "Student email" : "Staff email"}<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@tut4life.ac.za" autoComplete="email" /></label>}<label>{accountType === "student" ? "Student number" : "Staff number"}<input required value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder={accountType === "student" ? "e.g. 202312345" : "e.g. SEC-001"} autoComplete={accountType === "student" ? "username" : "off"} /></label><label>Password<input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" autoComplete="current-password" /></label>{error && <p className="error-message">{error}</p>}{message && <p className="success-message">{message}</p>}<button type="submit" className="button dark" disabled={busy}>{busy ? "Please wait..." : isRegistering ? "Create account" : "Sign in"}</button><button type="button" className="text-button" onClick={() => setMode(isRegistering ? "login" : "register")}>{isRegistering ? "Already have an account? Sign in" : "Need an account? Create one"}</button></form></section></main>;
 }
 
-function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol }: { user: User; items: Item[]; onLogout: () => void; onResolve: (item: Item) => void; onLogFound: () => void; onViewProtocol: () => void }) {
+function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol, onReassign, actionLoading }: { user: User; items: Item[]; onLogout: () => void; onResolve: (item: Item) => void; onLogFound: () => void; onViewProtocol: () => void; onReassign?: (id: string, newUserId: string) => Promise<void> | void; actionLoading?: boolean }) {
   const activeItems = items.filter((item) => item.status === "active");
-  return <main className="security-shell"><header className="security-header"><div><p className="eyebrow">CAMPUS SECURITY</p><h1>Good morning, {user.username}</h1><p>Custody and collection overview</p></div><div className="security-actions"><span className="security-avatar">{getInitials(user.username)}</span><button onClick={onLogout}>Sign out</button></div></header><section className="security-content"><div className="security-stats"><div><strong>{activeItems.length}</strong><span>In custody</span></div><div><strong>{items.filter((item) => item.category === "lost" && item.status === "active").length}</strong><span>Awaiting matches</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div><div className="security-title"><div><p className="eyebrow">TODAY&apos;S WORK QUEUE</p><h2>Manage items</h2></div><button className="button gold" onClick={onLogFound}>+ Log found item</button></div><div className="security-layout"><div className="custody-list">{activeItems.map((item) => <article className="custody-card" key={item.id}><span className="item-symbol">{categoryIcon[item.category]}</span><div><strong>{item.title}</strong><p>{item.location} · Received {formatDate(item.date_event)}</p><span className="status active">Awaiting collection</span></div><button onClick={() => onResolve(item)}>Release item</button></article>)}</div><aside className="security-note"><span>✓</span><h3>Release checklist</h3><p>Verify student ID, proof of ownership, and item condition before releasing an item.</p><button className="text-button" onClick={onViewProtocol}>View protocol ↗</button></aside></div></section></main>;
-}
+  return <main className="security-shell"><header className="security-header"><div><p className="eyebrow">CAMPUS SECURITY</p><h1>Good morning, {user.username}</h1><p>Custody and collection overview</p></div><div className="security-actions"><span className="security-avatar">{getInitials(user.username)}</span><button onClick={onLogout}>Sign out</button></div></header><section className="security-content"><div className="security-stats"><div><strong>{activeItems.length}</strong><span>In custody</span></div><div><strong>{items.filter((item) => item.category === "lost" && item.status === "active").length}</strong><span>Awaiting matches</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div><div className="security-title"><div><p className="eyebrow">TODAY&apos;S WORK QUEUE</p><h2>Manage items</h2></div><button className="button gold" onClick={onLogFound}>+ Log found item</button></div><div className="security-layout"><div className="custody-list">{activeItems.map((item) => <article className="custody-card" key={item.id}><span className="item-symbol">{categoryIcon[item.category]}</span><div><strong>{item.title}</strong><p>{item.location} · Received {formatDate(item.date_event)}</p><span className="status active">Awaiting collection</span></div><button onClick={() => onResolve(item)} disabled={Boolean(actionLoading)}>{actionLoading ? "Working…" : "Release item"}</button></article>)}</div><aside className="security-note"><span>✓</span><h3>Release checklist</h3><p>Verify student ID, proof of ownership, and item condition before releasing an item.</p><button className="text-button" onClick={onViewProtocol}>View protocol ↗</button></aside></div></section></main>;}
 
 function getInitials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);

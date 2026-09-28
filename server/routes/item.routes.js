@@ -1,10 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const itemController = require('../controllers/item.controller');
-const { authenticateToken } = require('../middleware/auth.middleware');
+const { authenticateToken, authorizeStaff, optionalAuthenticate } = require('../middleware/auth.middleware');
 
-router.get('/', itemController.getAllItems);
+router.get('/', optionalAuthenticate, itemController.getAllItems);
 router.get('/:id', itemController.getItemById);
+router.get('/:id/resolutions', authenticateToken, itemController.getResolutions);
+
+// Staff-only reassign endpoint
+router.patch('/:id/reassign', authenticateToken, authorizeStaff, itemController.reassignItem);
 
 router.post('/', authenticateToken, itemController.createItem);
 router.patch('/:id', authenticateToken, itemController.updateItem);
