@@ -36,14 +36,43 @@ const createItem = async (req, res, next) => {
 const getAllItems = async (req, res, next) => {
   try {
     const { category, item_category, search, status, date_from, date_to, location } = req.query;
+
+    const validCategories = ['lost', 'found'];
+    const validItemCategories = ['cards', 'keys', 'phones', 'bags', 'other'];
+    const validStatuses = ['active', 'resolved', 'all'];
+
+    if (category && !validCategories.includes(category)) {
+      return res.status(400).json({ error: 'Invalid item category, status, or date filter' });
+    }
+
+    if (item_category && !validItemCategories.includes(item_category)) {
+      return res.status(400).json({ error: 'Invalid item category, status, or date filter' });
+    }
+
+    if (status && !validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid item category, status, or date filter' });
+    }
+
+    if (date_from && Number.isNaN(Date.parse(date_from))) {
+      return res.status(400).json({ error: 'Invalid item category, status, or date filter' });
+    }
+
+    if (date_to && Number.isNaN(Date.parse(date_to))) {
+      return res.status(400).json({ error: 'Invalid item category, status, or date filter' });
+    }
+
+    if (typeof location === 'string' && !location.trim()) {
+      return res.status(400).json({ error: 'Invalid item category, status, or date filter' });
+    }
+
     const filters = {
       category,
       itemCategory: item_category,
       search,
-      status,
+      status: status === 'all' ? undefined : status,
       dateFrom: date_from,
       dateTo: date_to,
-      location,
+      location: location?.trim() || undefined,
     };
 
     if (req.user && req.user.accountType === 'staff') {

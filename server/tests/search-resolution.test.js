@@ -95,3 +95,26 @@ test('returns resolution events for an item', async () => {
     Item.getResolutions = original;
   }
 });
+
+test('rejects invalid browse filters before querying the model', async () => {
+  const res = buildRes();
+  let called = false;
+
+  await itemController.getAllItems({
+    query: {
+      category: 'lost',
+      item_category: 'laptops',
+      status: 'archived',
+      date_from: 'not-a-date',
+      date_to: '2026-09-21',
+      location: '  ',
+    },
+    user: { accountType: 'student' },
+  }, res, () => {
+    called = true;
+  });
+
+  assert.equal(called, false);
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.payload, { error: 'Invalid item category, status, or date filter' });
+});
