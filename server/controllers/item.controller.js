@@ -36,9 +36,21 @@ const createItem = async (req, res, next) => {
 const getAllItems = async (req, res, next) => {
   try {
     const { category, item_category, search, status, date_from, date_to, location } = req.query;
-    // Staff may request all items including ownership details
-    const includeOwner = req.user && req.user.accountType === 'staff';
-    const items = await Item.findAll({ category, itemCategory: item_category, search, status, dateFrom: date_from, dateTo: date_to, location, includeOwner });
+    const filters = {
+      category,
+      itemCategory: item_category,
+      search,
+      status,
+      dateFrom: date_from,
+      dateTo: date_to,
+      location,
+    };
+
+    if (req.user && req.user.accountType === 'staff') {
+      filters.includeOwner = true;
+    }
+
+    const items = await Item.findAll(filters);
     res.json(items);
   } catch (error) {
     next(error);
