@@ -1,11 +1,13 @@
 ﻿"use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { Button, SectionHeader } from "@/components/ui";
 
 type ReportType = "lost" | "found";
 type ItemCategory = "cards" | "keys" | "phones" | "bags" | "other";
 type ItemStatus = "active" | "resolved";
-type View = "home" | "browse" | "reports" | "notifications" | "account";
+type View = "home" | "browse" | "reports" | "notifications" | "account" | "forgot-password" | "reset-password";
 type AccountType = "student" | "staff";
 
 type User = {
@@ -28,6 +30,7 @@ type Item = {
   user_id?: string;
   reporter?: string;
   image_url?: string | null;
+  resolution_notes?: string | null;
 };
 
 type ContactPreferences = {
@@ -57,37 +60,22 @@ type ApiItem = {
   image_url?: string | null;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000/api/v1";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || (process.env.NODE_ENV === "production" ? "/api/v1" : "http://localhost:3000/api/v1");
 const categoryIcon: Record<string, string> = { lost: "↗", found: "⌕", cards: "▣", keys: "⌕", phones: "▤", bags: "□", other: "•" };
 const defaultContactPreferences: ContactPreferences = { emailUpdates: true, matchAlerts: true };
+
+function viewFromPath(pathname: string): View {
+  const segment = pathname.split("/")[2];
+  return ["browse", "reports", "notifications", "account"].includes(segment) ? segment as View : "home";
+}
 
 function getStoredToken() {
   if (typeof window === "undefined") return "";
   return localStorage.getItem("campuslink_token") || "";
 }
 
-function getStoredContactPreferences(): ContactPreferences {
-  if (typeof window === "undefined") return defaultContactPreferences;
-  try {
-    const saved = localStorage.getItem("campuslink_contact_preferences");
-    return saved ? { ...defaultContactPreferences, ...JSON.parse(saved) } : defaultContactPreferences;
-  } catch {
-    return defaultContactPreferences;
-  }
-}
-
-function getStoredNotifications(): NotificationItem[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const saved = localStorage.getItem("campuslink_notifications");
-    return saved ? JSON.parse(saved) : [];
-  } catch {
-    return [];
-  }
-}
-
-async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getStoredToken();
+async function apiRequest<T>(path: string, options: RequestInit = {}, includeBearer = true): Promise<T> {
+  const token = includeBearer ? getStoredToken() : "";
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     credentials: "include",
@@ -124,9 +112,14 @@ function mapApiItem(item: ApiItem): Item {
 }
 
 export default function Home() {
-  const [view, setView] = useState<View>("home");
+  const router = useRouter();
+  const pathname = usePathname();
+  const view = viewFromPath(pathname);
   const [items, setItems] = useState<Item[]>([]);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
+  const [pendingResolution, setPendingResolution] = useState<Item | null>(null);
+  const [resolutionNotes, setResolutionNotes] = useState("");
+  const [resolutionBusy, setResolutionBusy] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [reportType, setReportType] = useState<ReportType>("lost");
   const [search, setSearch] = useState("");
@@ -137,24 +130,36 @@ export default function Home() {
   const [dateTo, setDateTo] = useState("");
   const [location, setLocation] = useState("");
   const [user, setUser] = useState<User | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [itemsLoading, setItemsLoading] = useState(false);
   const [browseItems, setBrowseItems] = useState<Item[]>([]);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [itemsError, setItemsError] = useState("");
+  const [authForgotError, setAuthForgotError] = useState("");
+  const [authForgotMessage, setAuthForgotMessage] = useState("");
+  const [authResetError, setAuthResetError] = useState("");
+  const [authResetMessage, setAuthResetMessage] = useState("");
   const [contactPreferences, setContactPreferences] = useState<ContactPreferences>(defaultContactPreferences);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [protocolOpen, setProtocolOpen] = useState(false);
 
+  function navigateToView(nextView: View) {
+    if (user) router.push(nextView === "home" ? "/app" : `/app/${nextView}`);
+  }
+
   useEffect(() => {
-    const storedUser = localStorage.getItem("campuslink_user");
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-    setContactPreferences(getStoredContactPreferences());
-    setNotifications(getStoredNotifications());
-    void apiRequest<ContactPreferences>("/auth/preferences").then(setContactPreferences).catch(() => undefined);
+    void apiRequest<User>("/auth/session", {}, false)
+      .then((sessionUser) => {
+        setUser(sessionUser);
+        localStorage.setItem("campuslink_user", JSON.stringify(sessionUser));
+      })
+      .catch(() => {
+        localStorage.removeItem("campuslink_token");
+        localStorage.removeItem("campuslink_user");
+        setUser(null);
+      })
+      .finally(() => setAuthChecking(false));
   }, []);
 
   useEffect(() => {
@@ -180,13 +185,17 @@ export default function Home() {
 
   useEffect(() => {
     if (!user) return;
-    const params = new URLSearchParams({ status: showArchived ? "resolved" : "active" });
-    if (search.trim()) params.set("search", search.trim());
-    if (filter !== "all") params.set("category", filter);
-    if (itemCategory !== "all") params.set("item_category", itemCategory);
-    if (dateFrom) params.set("date_from", dateFrom);
-    if (dateTo) params.set("date_to", dateTo);
-    if (location.trim()) params.set("location", location.trim());
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("token")) {
+      router.replace(`/app/reset-password?token=${params.get("token")}`);
+    }
+    const paramsFilter = new URLSearchParams({ status: showArchived ? "resolved" : "active" });
+    if (search.trim()) paramsFilter.set("search", search.trim());
+    if (filter !== "all") paramsFilter.set("category", filter);
+    if (itemCategory !== "all") paramsFilter.set("item_category", itemCategory);
+    if (dateFrom) paramsFilter.set("date_from", dateFrom);
+    if (dateTo) paramsFilter.set("date_to", dateTo);
+    if (location.trim()) paramsFilter.set("location", location.trim());
 
     const loadBrowseItems = async () => {
       setBrowseLoading(true);
@@ -203,9 +212,7 @@ export default function Home() {
     void loadBrowseItems();
   }, [dateFrom, dateTo, filter, itemCategory, location, search, showArchived, user]);
 
-  useEffect(() => {
-    if (!user) return;
-    const latestNotifications: NotificationItem[] = [
+  const notifications: NotificationItem[] = user ? [
       ...items.filter((item) => item.user_id === user.id && item.status === "resolved").slice(0, 2).map((item) => ({
         id: item.id,
         title: "Case resolved",
@@ -220,13 +227,7 @@ export default function Home() {
         time: "Recent",
         highlight: true,
       })),
-    ];
-
-    if (latestNotifications.length) {
-      setNotifications(latestNotifications);
-      localStorage.setItem("campuslink_notifications", JSON.stringify(latestNotifications));
-    }
-  }, [items, user]);
+    ] : [];
 
   useEffect(() => {
     localStorage.setItem("campuslink_contact_preferences", JSON.stringify(contactPreferences));
@@ -265,19 +266,33 @@ export default function Home() {
 
       setItems((current) => [mapApiItem(item), ...current]);
       setShowReport(false);
-      setView("reports");
+      navigateToView("reports");
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to create the report");
     }
   }
 
+  function requestResolution(item: Item) {
+    setItemsError("");
+    setPendingResolution(item);
+    setResolutionNotes(item.resolution_notes || "");
+  }
+
   async function resolveItem(id: string, notes = "") {
+    setItemsError("");
+    setResolutionBusy(true);
     try {
       const item = await apiRequest<ApiItem>(`/items/${id}/resolve`, { method: "PATCH", body: JSON.stringify({ notes }) });
-      setItems((current) => current.map((entry) => entry.id === id ? mapApiItem(item) : entry));
-      setSelectedItem((current) => current && current.id === id ? mapApiItem(item) : current);
+      const mapped = mapApiItem(item);
+      setItems((current) => current.map((entry) => entry.id === id ? mapped : entry));
+      setBrowseItems((current) => current.map((entry) => entry.id === id ? mapped : entry));
+      setSelectedItem((current) => current && current.id === id ? mapped : current);
+      setPendingResolution(null);
+      setResolutionNotes("");
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to resolve the item");
+    } finally {
+      setResolutionBusy(false);
     }
   }
 
@@ -302,6 +317,48 @@ export default function Home() {
     }
   }
 
+  async function forgotPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthForgotError("");
+    setAuthForgotMessage("");
+    const data = new FormData(event.currentTarget);
+    try {
+      await apiRequest<{ message: string }>("/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify({ email: String(data.get("email")) }),
+      });
+      setAuthForgotMessage("If an account exists with this email, a reset link has been sent.");
+    } catch (error) {
+      setAuthForgotError(error instanceof Error ? error.message : "Unable to process request");
+    }
+  }
+
+  async function resetPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthResetError("");
+    setAuthResetMessage("");
+    const data = new FormData(event.currentTarget);
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (!token) {
+      setAuthResetError("Missing security token");
+      return;
+    }
+    try {
+      await apiRequest<{ message: string }>("/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({
+          token,
+          newPassword: String(data.get("password")),
+        }),
+      });
+      setAuthResetMessage("Password has been reset successfully. You can now sign in.");
+      setTimeout(() => router.replace("/"), 3000);
+    } catch (error) {
+      setAuthResetError(error instanceof Error ? error.message : "Unable to reset password");
+    }
+  }
+
   async function login(accountType: AccountType, identifier: string, password: string) {
     setAuthError("");
     setAuthMessage("");
@@ -314,6 +371,7 @@ export default function Home() {
       localStorage.setItem("campuslink_token", result.token);
       localStorage.setItem("campuslink_user", JSON.stringify(nextUser));
       setUser(nextUser);
+      router.replace("/app");
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Unable to sign in");
     }
@@ -352,17 +410,22 @@ export default function Home() {
     setUser(null);
     setItems([]);
     setSelectedItem(null);
-    setView("home");
+    router.replace("/");
   }
 
-  if (!user) return <LoginPage onLogin={login} onRegister={register} error={authError} message={authMessage} />;
+  if (authChecking) return <main className="login-shell"><p role="status">Checking your session…</p></main>;
+  if (!user) {
+    if (view === "forgot-password") return <ForgotPasswordPage onForgot={forgotPassword} error={authForgotError} message={authForgotMessage} onBack={() => router.replace("/app")} />;
+    if (view === "reset-password") return <ResetPasswordPage onReset={resetPassword} error={authResetError} message={authResetMessage} />;
+    return <LoginPage onLogin={login} onRegister={register} error={authError} message={authMessage} onForgot={() => router.push("/app/forgot-password")} />;
+  }
   if (user.account_type === "staff") {
     return (
       <SecurityDashboard
         user={user}
         items={items}
         onLogout={logout}
-        onResolve={resolveItem}
+        onResolve={requestResolution}
         onLogFound={() => openReport("found")}
         onViewProtocol={() => setProtocolOpen(true)}
       />
@@ -372,29 +435,30 @@ export default function Home() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <button className="brand" onClick={() => setView("home")} aria-label="Go to home"><span>UF</span><strong>Campus<span>Link</span></strong></button>
+        <button className="brand" onClick={() => navigateToView("home")} aria-label="Go to home"><span>UF</span><strong>Campus<span>Link</span></strong></button>
         <nav className="topnav" aria-label="Main navigation">
-          <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}>Home</button>
-          <button className={view === "browse" ? "active" : ""} onClick={() => setView("browse")}>Browse items</button>
-          <button className={view === "reports" ? "active" : ""} onClick={() => setView("reports")}>My reports</button>
-          <button className={view === "notifications" ? "active" : ""} onClick={() => setView("notifications")}>Notifications <b>2</b></button>
+          <button className={view === "home" ? "active" : ""} onClick={() => navigateToView("home")}>Home</button>
+          <button className={view === "browse" ? "active" : ""} onClick={() => navigateToView("browse")}>Browse items</button>
+          <button className={view === "reports" ? "active" : ""} onClick={() => navigateToView("reports")}>My reports</button>
+          <button className={view === "notifications" ? "active" : ""} onClick={() => navigateToView("notifications")}>Notifications <b>2</b></button>
         </nav>
-        <button className="user-chip" onClick={() => setView("account")}><span>{getInitials(user.username)}</span><span className="user-name">{user.username}</span></button>
+        <button className="user-chip" onClick={() => navigateToView("account")}><span>{getInitials(user.username)}</span><span className="user-name">{user.username}</span></button>
       </header>
 
       {itemsError && <div className="error-banner">{itemsError}</div>}
       {itemsLoading && <div className="loading-banner">Loading items…</div>}
 
-      {view === "home" && <HomeView items={items} onBrowse={() => setView("browse")} onReport={openReport} onSelect={setSelectedItem} />}
+      {view === "home" && <HomeView items={items} onBrowse={() => navigateToView("browse")} onReport={openReport} onSelect={setSelectedItem} />}
       {view === "browse" && <BrowseView items={visibleItems} search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} itemCategory={itemCategory} setItemCategory={setItemCategory} dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} location={location} setLocation={setLocation} showArchived={showArchived} setShowArchived={setShowArchived} loading={browseLoading} onSelect={setSelectedItem} onReport={openReport} />}
       {view === "reports" && <ReportsView items={items.filter((item) => item.user_id === user.id)} onSelect={setSelectedItem} onReport={openReport} />}
       {view === "notifications" && <NotificationsView notifications={notifications} />}
-      {view === "account" && <AccountView user={user} items={items.filter((item) => item.user_id === user.id)} contactPreferences={contactPreferences} setContactPreferences={setContactPreferences} onBrowseReports={() => setView("reports")} />}
+      {view === "account" && <AccountView user={user} items={items.filter((item) => item.user_id === user.id)} contactPreferences={contactPreferences} setContactPreferences={setContactPreferences} onBrowseReports={() => navigateToView("reports")} />}
 
       <footer className="footer"><span>CampusLink</span><span>Lost and found, together.</span><button onClick={logout}>Sign out</button></footer>
 
       {showReport && <ReportModal type={reportType} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
-      {selectedItem && <ItemModal item={selectedItem} canManage={selectedItem.user_id === user.id} canResolve={selectedItem.user_id === user.id} onClose={() => setSelectedItem(null)} onResolve={resolveItem} onDelete={deleteItem} onUpdate={updateItem} />}
+      {selectedItem && <ItemModal item={selectedItem} canManage={selectedItem.user_id === user.id} canResolve={selectedItem.user_id === user.id} onClose={() => setSelectedItem(null)} onResolve={requestResolution} onDelete={deleteItem} onUpdate={updateItem} />}
+      {pendingResolution && <ResolutionModal item={pendingResolution} notes={resolutionNotes} setNotes={setResolutionNotes} busy={resolutionBusy} error={itemsError} onClose={() => setPendingResolution(null)} onConfirm={() => void resolveItem(pendingResolution.id, resolutionNotes)} />}
       {protocolOpen && <ProtocolModal onClose={() => setProtocolOpen(false)} />}
     </main>
   );
@@ -402,8 +466,8 @@ export default function Home() {
 
 function HomeView({ items, onBrowse, onReport, onSelect }: { items: Item[]; onBrowse: () => void; onReport: (type: ReportType) => void; onSelect: (item: Item) => void }) {
   return <>
-    <section className="hero"><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p className="hero-copy">A trusted board for reporting lost items, sharing found belongings, and getting them back to the right person.</p><div className="hero-actions"><button className="button dark" onClick={() => onReport("lost")}>Report lost item <span>→</span></button><button className="button gold" onClick={() => onReport("found")}>Report found item <span>+</span></button></div></div><div className="hero-note"><span>✦</span><p><strong>Built for campus.</strong><br />Every report helps our community look out for one another.</p></div></section>
-    <section className="section"><div className="section-heading"><div><p className="eyebrow">LIVE BOARD</p><h2>Recent on campus</h2></div><button className="text-button" onClick={onBrowse}>View all <span>↗</span></button></div><div className="item-grid">{items.slice(0, 3).map((item) => <ItemCard key={item.id} item={item} onClick={() => onSelect(item)} />)}</div></section>
+    <section className="hero"><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p className="hero-copy">A trusted board for reporting lost items, sharing found belongings, and getting them back to the right person.</p><div className="hero-actions"><Button variant="primary" onClick={() => onReport("lost")}>Report lost item <span>→</span></Button><Button variant="secondary" onClick={() => onReport("found")}>Report found item <span>+</span></Button></div></div><div className="hero-note"><span>✦</span><p><strong>Built for campus.</strong><br />Every report helps our community look out for one another.</p></div></section>
+    <section className="section"><SectionHeader eyebrow="Live board" title="Recent on campus" action={<button className="text-button" onClick={onBrowse}>View all <span>↗</span></button>} /><div className="item-grid">{items.slice(0, 3).map((item) => <ItemCard key={item.id} item={item} onClick={() => onSelect(item)} />)}</div></section>
     <section className="stats"><div><strong>{items.filter((item) => item.status === "active").length}</strong><span>active reports</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>items reunited</span></div><div><strong>24h</strong><span>average response</span></div></section>
   </>;
 }
@@ -432,13 +496,25 @@ function ItemCard({ item, onClick }: { item: Item; onClick: () => void }) { retu
 
 function ReportModal({ type, onClose, onSubmit }: { type: ReportType; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <div className="modal-backdrop"><form className="modal" onSubmit={onSubmit}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">NEW REPORT</p><h2>Report {type} item</h2><p className="modal-copy">Share a few details so the campus community can help.</p><label>Item name<input name="title" required placeholder={type === "lost" ? "e.g. Black iPhone 14" : "e.g. Brown leather wallet"} /></label><label>Description<textarea name="description" required placeholder="Include useful identifying details" /></label><label>Item type<select name="item_category" defaultValue="other"><option value="cards">Cards</option><option value="keys">Keys</option><option value="phones">Phones</option><option value="bags">Bags</option><option value="other">Other</option></select></label><label>{type === "lost" ? "Last seen location" : "Found at"}<select name="location" required defaultValue=""><option value="" disabled>Select a campus location</option><option>Library</option><option>Campus Security Desk</option><option>Student Centre</option><option>Main Quad</option><option>Residence Hall</option><option>Dining Hall</option><option>Lecture Building</option></select></label><label>Date {type === "lost" ? "lost" : "found"}<input name="date_event" type="date" required /></label><label className="photo-input"><span>＋</span> Add a photo<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label><button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit">Submit {type} item report <span>→</span></button></form></div>; }
 
-function ItemModal({ item, canManage, canResolve, onClose, onResolve, onDelete, onUpdate }: { item: Item; canManage: boolean; canResolve: boolean; onClose: () => void; onResolve: (id: string, notes: string) => void; onDelete: (id: string) => void; onUpdate: (id: string, updates: { title: string; description: string; location: string; date_event: string }) => void }) { const [notes, setNotes] = useState(""); const [editing, setEditing] = useState(false); return <div className="modal-backdrop"><div className="modal detail-modal"><button className="close" onClick={onClose}>×</button>{item.image_url ? <img className="detail-image" src={item.image_url} alt={item.title} /> : <div className="detail-image">{categoryIcon[item.item_category || item.category]}</div>}<span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span>{editing ? <form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); onUpdate(item.id, { title: String(data.get("title")), description: String(data.get("description")), location: String(data.get("location")), date_event: String(data.get("date_event")) }); setEditing(false); }}><label>Title<input name="title" defaultValue={item.title} required /></label><label>Description<textarea name="description" defaultValue={item.description} required /></label><label>Location<input name="location" defaultValue={item.location} required /></label><label>Date<input name="date_event" type="date" defaultValue={item.date_event} required /></label><button className="button dark" type="submit">Save changes</button></form> : <><h2>{item.title}</h2><p className="detail-category">{item.category === "lost" ? "Lost item" : "Found item"} · Reported by {item.reporter || "Campus user"}</p><p>{item.description}</p><div className="detail-meta"><span>⌖ <b>Location</b> {item.location}</span><span>▣ <b>Date</b> {formatDate(item.date_event)}</span></div><p className="privacy-note">Bring your student card and proof of ownership to Campus Security.</p>{item.status === "active" && canResolve && <><label>Resolution notes (optional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="e.g. Returned via Security Desk" maxLength={1000} /></label><button className="button dark" onClick={() => onResolve(item.id, notes)}>Mark as resolved</button></>}{item.status === "active" && canManage && <div className="detail-actions"><button className="button gold" onClick={() => setEditing(true)}>Edit report</button><button className="text-button" onClick={() => onDelete(item.id)}>Delete report</button></div>}</>}</div></div>; }
+function ItemModal({ item, canManage, canResolve, onClose, onResolve, onDelete, onUpdate }: { item: Item; canManage: boolean; canResolve: boolean; onClose: () => void; onResolve: (item: Item) => void; onDelete: (id: string) => void; onUpdate: (id: string, updates: { title: string; description: string; location: string; date_event: string }) => void }) { const [editing, setEditing] = useState(false); return <div className="modal-backdrop"><div className="modal detail-modal"><button className="close" onClick={onClose}>×</button>{item.image_url ? <img className="detail-image" src={item.image_url} alt={item.title} /> : <div className="detail-image">{categoryIcon[item.item_category || item.category]}</div>}<span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span>{editing ? <form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); onUpdate(item.id, { title: String(data.get("title")), description: String(data.get("description")), location: String(data.get("location")), date_event: String(data.get("date_event")) }); setEditing(false); }}><label>Title<input name="title" defaultValue={item.title} required /></label><label>Description<textarea name="description" defaultValue={item.description} required /></label><label>Location<input name="location" defaultValue={item.location} required /></label><label>Date<input name="date_event" type="date" defaultValue={item.date_event} required /></label><button className="button dark" type="submit">Save changes</button></form> : <><h2>{item.title}</h2><p className="detail-category">{item.category === "lost" ? "Lost item" : "Found item"} · Reported by {item.reporter || "Campus user"}</p><p>{item.description}</p><div className="detail-meta"><span>⌖ <b>Location</b> {item.location}</span><span>▣ <b>Date</b> {formatDate(item.date_event)}</span></div><p className="privacy-note">Bring your student card and proof of ownership to Campus Security.</p>{item.status === "active" && canResolve && <button className="button dark" onClick={() => onResolve(item)}>Mark as resolved</button>}{item.status === "active" && canManage && <div className="detail-actions"><button className="button gold" onClick={() => setEditing(true)}>Edit report</button><button className="text-button" onClick={() => onDelete(item.id)}>Delete report</button></div>}</>}</div></div>; }
+
+function ResolutionModal({ item, notes, setNotes, busy, error, onClose, onConfirm }: { item: Item; notes: string; setNotes: (value: string) => void; busy: boolean; error: string; onClose: () => void; onConfirm: () => void }) {
+  return <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="resolution-title"><button className="close" onClick={onClose} disabled={busy} aria-label="Close">×</button><p className="eyebrow">CONFIRM COLLECTION</p><h2 id="resolution-title">Release {item.title}?</h2><p className="modal-copy">Confirm the item has been returned to its owner. This will move the report to resolved history.</p><label>Resolution notes (optional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="e.g. Collected at the Security Desk" maxLength={1000} /></label>{error && <p className="form-error" role="alert">{error}</p>}<div className="detail-actions"><button className="button dark" onClick={onConfirm} disabled={busy}>{busy ? "Saving…" : "Confirm release"}</button><button className="text-button" onClick={onClose} disabled={busy}>Cancel</button></div></section></div>;
+}
 
 function ProtocolModal({ onClose }: { onClose: () => void }) {
   return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">SECURITY PROTOCOL</p><h2>Release checklist</h2><p className="modal-copy">Complete each check before releasing an item to a student.</p><ul className="protocol-list"><li>Verify the claimant matches the item description and campu s record.</li><li>Confirm proof of ownership or a valid student identification match.</li><li>Sign the release and note the responsible staff member for audit.</li><li>Mark the item as resolved only after collection is confirmed.</li></ul></div></div>;
 }
 
-function LoginPage({ onLogin, onRegister, error, message }: { onLogin: (accountType: AccountType, identifier: string, password: string) => Promise<void>; onRegister: (accountType: AccountType, name: string, surname: string, email: string, identifier: string, password: string) => Promise<void>; error: string; message: string }) {
+function ForgotPasswordPage({ onForgot, error, message, onBack }: { onForgot: (event: FormEvent<HTMLFormElement>) => void; error: string; message: string; onBack: () => void }) {
+  return <main className="login-shell"><div className="login-art"><button className="brand" aria-label="CampusLink"><span>UF</span><strong>Campus<span>Link</span></strong></button><div><p className="eyebrow">RESET ACCESS</p><h1>Forgot your password?</h1><p>We can send you a secure reset link if the account exists.</p></div><small>Lost and found, together.</small></div><section className="login-panel"><div className="login-heading"><p className="eyebrow">PASSWORD RECOVERY</p><h2>Request a reset link</h2></div><form className="login-form" onSubmit={onForgot}><label>Campus email<input name="email" type="email" required placeholder="you@tut4life.ac.za" autoComplete="email" /></label>{error && <p className="form-error" role="alert">{error}</p>}{message && <p className="form-message" role="status">{message}</p>}<button className="button dark" type="submit">Send reset link</button><button type="button" className="text-button" onClick={onBack}>Back to sign in</button></form></section></main>;
+}
+
+function ResetPasswordPage({ onReset, error, message }: { onReset: (event: FormEvent<HTMLFormElement>) => void; error: string; message: string }) {
+  return <main className="login-shell"><div className="login-art"><button className="brand" aria-label="CampusLink"><span>UF</span><strong>Campus<span>Link</span></strong></button><div><p className="eyebrow">SECURE ACCESS</p><h1>Reset your password</h1><p>Choose a new password for your CampusLink account.</p></div><small>Lost and found, together.</small></div><section className="login-panel"><div className="login-heading"><p className="eyebrow">NEW PASSWORD</p><h2>Set a strong password</h2></div><form className="login-form" onSubmit={onReset}><label>New password<input name="password" type="password" required minLength={8} placeholder="At least 8 characters" autoComplete="new-password" /></label>{error && <p className="form-error" role="alert">{error}</p>}{message && <p className="form-message" role="status">{message}</p>}<button className="button dark" type="submit">Update password</button></form></section></main>;
+}
+
+function LoginPage({ onLogin, onRegister, error, message, onForgot }: { onLogin: (accountType: AccountType, identifier: string, password: string) => Promise<void>; onRegister: (accountType: AccountType, name: string, surname: string, email: string, identifier: string, password: string) => Promise<void>; error: string; message: string; onForgot: () => void }) {
   const [accountType, setAccountType] = useState<AccountType>("student");
   const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("");
@@ -469,9 +545,9 @@ function LoginPage({ onLogin, onRegister, error, message }: { onLogin: (accountT
   return <main className="login-shell"><div className="login-art"><button className="brand" aria-label="CampusLink"><span>UF</span><strong>Campus<span>Link</span></strong></button><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p>A trusted board for the campus community.</p></div><small>Lost and found, together.</small></div><section className="login-panel"><div className="login-heading"><p className="eyebrow">{isRegistering ? "JOIN CAMPUSLINK" : "WELCOME BACK"}</p><h2>{isRegistering ? "Create your account" : "Sign in to CampusLink"}</h2><p>{isRegistering ? "Use your campus details to join the board." : "Use your campus credentials to continue."}</p></div><div className="account-switch"><button type="button" className={accountType === "student" ? "selected" : ""} onClick={() => setAccountType("student")}>Student</button><button type="button" className={accountType === "staff" ? "selected" : ""} onClick={() => setAccountType("staff")}>Campus Security</button></div><form onSubmit={submit} className="login-form">{isRegistering && <div className="name-fields"><label>Name<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="First name" autoComplete="given-name" /></label><label>Surname<input required value={surname} onChange={(event) => setSurname(event.target.value)} placeholder="Surname" autoComplete="family-name" /></label></div>}{isRegistering && <label>{accountType === "student" ? "Student email" : "Staff email"}<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@tut4life.ac.za" autoComplete="email" /></label>}<label>{accountType === "student" ? "Student number" : "Staff number"}<input required value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder={accountType === "student" ? "e.g. 202312345" : "e.g. SEC-001"} autoComplete={accountType === "student" ? "username" : "off"} /></label><label>Password<input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" autoComplete="current-password" /></label>{error && <p className="error-message">{error}</p>}{message && <p className="success-message">{message}</p>}<button type="submit" className="button dark" disabled={busy}>{busy ? "Please wait..." : isRegistering ? "Create account" : "Sign in"}</button><button type="button" className="text-button" onClick={() => setMode(isRegistering ? "login" : "register")}>{isRegistering ? "Already have an account? Sign in" : "Need an account? Create one"}</button></form></section></main>;
 }
 
-function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol }: { user: User; items: Item[]; onLogout: () => void; onResolve: (id: string) => void; onLogFound: () => void; onViewProtocol: () => void }) {
+function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol }: { user: User; items: Item[]; onLogout: () => void; onResolve: (item: Item) => void; onLogFound: () => void; onViewProtocol: () => void }) {
   const activeItems = items.filter((item) => item.status === "active");
-  return <main className="security-shell"><header className="security-header"><div><p className="eyebrow">CAMPUS SECURITY</p><h1>Good morning, {user.username}</h1><p>Custody and collection overview</p></div><div className="security-actions"><span className="security-avatar">{getInitials(user.username)}</span><button onClick={onLogout}>Sign out</button></div></header><section className="security-content"><div className="security-stats"><div><strong>{activeItems.length}</strong><span>In custody</span></div><div><strong>{items.filter((item) => item.category === "lost" && item.status === "active").length}</strong><span>Awaiting matches</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div><div className="security-title"><div><p className="eyebrow">TODAY&apos;S WORK QUEUE</p><h2>Manage items</h2></div><button className="button gold" onClick={onLogFound}>+ Log found item</button></div><div className="security-layout"><div className="custody-list">{activeItems.map((item) => <article className="custody-card" key={item.id}><span className="item-symbol">{categoryIcon[item.category]}</span><div><strong>{item.title}</strong><p>{item.location} · Received {formatDate(item.date_event)}</p><span className="status active">Awaiting collection</span></div><button onClick={() => onResolve(item.id)}>Release item</button></article>)}</div><aside className="security-note"><span>✓</span><h3>Release checklist</h3><p>Verify student ID, proof of ownership, and item condition before releasing an item.</p><button className="text-button" onClick={onViewProtocol}>View protocol ↗</button></aside></div></section></main>;
+  return <main className="security-shell"><header className="security-header"><div><p className="eyebrow">CAMPUS SECURITY</p><h1>Good morning, {user.username}</h1><p>Custody and collection overview</p></div><div className="security-actions"><span className="security-avatar">{getInitials(user.username)}</span><button onClick={onLogout}>Sign out</button></div></header><section className="security-content"><div className="security-stats"><div><strong>{activeItems.length}</strong><span>In custody</span></div><div><strong>{items.filter((item) => item.category === "lost" && item.status === "active").length}</strong><span>Awaiting matches</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div><div className="security-title"><div><p className="eyebrow">TODAY&apos;S WORK QUEUE</p><h2>Manage items</h2></div><button className="button gold" onClick={onLogFound}>+ Log found item</button></div><div className="security-layout"><div className="custody-list">{activeItems.map((item) => <article className="custody-card" key={item.id}><span className="item-symbol">{categoryIcon[item.category]}</span><div><strong>{item.title}</strong><p>{item.location} · Received {formatDate(item.date_event)}</p><span className="status active">Awaiting collection</span></div><button onClick={() => onResolve(item)}>Release item</button></article>)}</div><aside className="security-note"><span>✓</span><h3>Release checklist</h3><p>Verify student ID, proof of ownership, and item condition before releasing an item.</p><button className="text-button" onClick={onViewProtocol}>View protocol ↗</button></aside></div></section></main>;
 }
 
 function getInitials(name: string) {

@@ -320,6 +320,7 @@ Authorization must be enforced by the server, not only by hiding client controls
 | `PATCH` | `/api/v1/items/:id` | Yes, owner | Update a report |
 | `DELETE` | `/api/v1/items/:id` | Yes, owner | Delete a report |
 | `PATCH` | `/api/v1/items/:id/resolve` | Yes, policy-controlled | Resolve/release a report with optional `notes` |
+| `GET` | `/api/v1/auth/session` | Yes | Return the current authenticated user's safe profile |
 
 Any change to request or response fields must update this contract and the implementation together.
 

@@ -76,3 +76,29 @@ test('passes search and filter parameters to the item model', async () => {
     Item.findAll = original;
   }
 });
+
+test('accepts an all-status browse query without filtering by resolved state', async () => {
+  const original = Item.findAll;
+  let received;
+  Item.findAll = async (filters) => {
+    received = filters;
+    return [{ id: 'item-1', status: 'active' }, { id: 'item-2', status: 'resolved' }];
+  };
+
+  try {
+    const res = buildRes();
+    await itemController.getAllItems({
+      query: {
+        status: 'all',
+      },
+    }, res, () => {
+      throw new Error('next should not be called');
+    });
+
+    assert.equal(received.status, 'all');
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.payload.length, 2);
+  } finally {
+    Item.findAll = original;
+  }
+});
