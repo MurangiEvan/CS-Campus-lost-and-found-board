@@ -37,7 +37,7 @@ const Item = {
       params.push(search);
     }
 
-    if (status && ['active', 'resolved'].includes(status)) {
+    if (status && status !== 'all' && ['active', 'resolved'].includes(status)) {
       query += ` AND status = $${paramCount++}`;
       params.push(status);
     }
