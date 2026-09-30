@@ -2,6 +2,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/user.model');
 const { jwtSecret, jwtExpiration } = require('../config/auth');
+const crypto = require('crypto');
+const emailUtils = require('../utils/email');
 
 const isCampusEmail = (email, identifier) => email.trim().toLowerCase() === `${identifier.trim().toLowerCase()}@tut4life.ac.za`;
 
@@ -87,6 +89,70 @@ const logout = (req, res) => {
   res.json({ message: 'Logged out' });
 };
 
+const forgotPassword = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await User.findByEmail(normalizedEmail);
+
+    if (user) {
+      const token = crypto.randomBytes(32).toString('hex');
+      const expires = new Date(Date.now() + 3600000); // 1 hour
+      await User.setResetToken(normalizedEmail, token, expires);
+      await emailUtils.sendPasswordResetEmail(normalizedEmail, token);
+    }
+
+    // Always return success to prevent email enumeration
+    res.json({ message: 'If an account exists with this email, a reset link has been sent.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const resetPassword = async (req, res, next) => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: 'Token and new password are required' });
+    }
+
+    const user = await User.findByResetToken(token);
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await User.updatePassword(user.id, passwordHash);
+
+    res.json({ message: 'Password has been reset successfully. You can now sign in.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getSession = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(401).json({ error: 'Session account no longer exists' });
+    }
+
+    res.json({
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      account_type: user.account_type,
+      identifier: user.account_type === 'staff' ? user.staff_number : user.student_number,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getPreferences = async (req, res, next) => {
   try {
     const user = await User.findById(req.user.id);
@@ -108,4 +174,4 @@ const updatePreferences = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, logout, getPreferences, updatePreferences };
+module.exports = { register, login, logout, forgotPassword, resetPassword, getSession, getPreferences, updatePreferences };

@@ -17,9 +17,14 @@ COOKIE_SECURE=true
 ### Client (.env.local or deployment env)
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=https://your-api-domain.com/api/v1
+# Leave this unset in production so the client uses /api/v1 through the Vercel rewrite.
+# For local development use http://localhost:3000/api/v1.
+NEXT_PUBLIC_API_BASE_URL=
+API_SERVER_URL=https://your-api-domain.com
 NEXT_PUBLIC_APP_URL=https://your-client-domain.com
 ```
+
+For Vercel, set `API_SERVER_URL` to the deployed Render API origin, for example `https://campuslink-api.onrender.com`, then redeploy. Do not set the public client URL to `localhost` in a production deployment.
 
 ## 2. Database setup
 

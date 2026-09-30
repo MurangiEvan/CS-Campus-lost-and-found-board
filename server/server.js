@@ -10,35 +10,30 @@ const { errorMiddleware } = require('./middleware/error.middleware');
 const db = require('./config/db');
 
 const app = express();
-const rawCors = process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3001,http://localhost:3002';
+const rawCors = process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3001,http://localhost:3002,https://cs-campus-lost-and-found-board.vercel.app,.vercel.app';
 const allowedOrigins = rawCors.split(',').map((origin) => origin.trim()).filter(Boolean);
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false });
 const mutationLimiter = rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false });
 
-// Middleware
-app.use(helmet());
-app.use(cors({
+const corsOptions = {
   origin(origin, callback) {
-    // Allow non-browser requests (e.g. curl, server-side) with no origin
     if (!origin) {
       callback(null, true);
       return;
     }
 
-    // Exact match whitelist
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
       return;
     }
 
-    // Support suffix patterns in CORS_ORIGINS, e.g. ".vercel.app" or ".onrender.com"
-    const suffixes = allowedOrigins.filter((o) => o.startsWith('.'));
-    if (suffixes.some((suf) => origin.endsWith(suf))) {
+    const suffixes = allowedOrigins.filter((value) => value.startsWith('.'));
+    const matchesSuffix = suffixes.some((suffix) => origin.endsWith(suffix));
+    if (matchesSuffix) {
       callback(null, true);
       return;
     }
 
-    // Support wildcard '*' in the list to allow any origin (use with caution)
     if (allowedOrigins.includes('*')) {
       callback(null, true);
       return;
@@ -47,7 +42,14 @@ app.use(cors({
     callback(new Error('CORS policy does not allow this origin'));
   },
   credentials: true,
-}));
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+};
+
+// Middleware
+app.use(helmet());
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));

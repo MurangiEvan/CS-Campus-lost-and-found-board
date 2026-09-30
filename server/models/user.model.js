@@ -25,8 +25,26 @@ const User = {
   },
 
   async findById(id) {
-    const query = 'SELECT id, username, email, email_updates, match_alerts, created_at FROM users WHERE id = $1;';
+    const query = 'SELECT id, username, email, account_type, student_number, staff_number, email_updates, match_alerts, created_at FROM users WHERE id = $1;';
     const { rows } = await db.query(query, [id]);
+    return rows[0];
+  },
+
+  async setResetToken(email, token, expires) {
+    const query = 'UPDATE users SET reset_token = $1, reset_token_expires = $2 WHERE email = $3 RETURNING id;';
+    const { rows } = await db.query(query, [token, expires, email]);
+    return rows[0];
+  },
+
+  async findByResetToken(token) {
+    const query = 'SELECT id, username, email FROM users WHERE reset_token = $1 AND reset_token_expires > NOW();';
+    const { rows } = await db.query(query, [token]);
+    return rows[0];
+  },
+
+  async updatePassword(userId, newPasswordHash) {
+    const query = 'UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2 RETURNING id;';
+    const { rows } = await db.query(query, [newPasswordHash, userId]);
     return rows[0];
   },
 

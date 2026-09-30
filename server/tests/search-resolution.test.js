@@ -77,12 +77,38 @@ test('passes search and filter parameters to the item model', async () => {
   }
 });
 
+test('accepts an all-status browse query without filtering by resolved state', async () => {
+  const original = Item.findAll;
+  let received;
+  Item.findAll = async (filters) => {
+    received = filters;
+    return [{ id: 'item-1', status: 'active' }, { id: 'item-2', status: 'resolved' }];
+  };
+
+  try {
+    const res = buildRes();
+    await itemController.getAllItems({
+      query: {
+        status: 'all',
+      },
+    }, res, () => {
+      throw new Error('next should not be called');
+    });
+
+    assert.equal(received.status, 'all');
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.payload.length, 2);
+  } finally {
+    Item.findAll = original;
+  }
+});
+
 test('returns resolution events for an item', async () => {
   const original = Item.getResolutions;
   let receivedId = null;
   Item.getResolutions = async (itemId) => {
     receivedId = itemId;
-    return [ { id: 'res-1', item_id: itemId, resolved_by: 'staff-1', notes: 'Test', created_at: '2026-09-22T00:00:00Z' } ];
+    return [{ id: 'res-1', item_id: itemId, resolved_by: 'staff-1', notes: 'Test', created_at: '2026-09-22T00:00:00Z' }];
   };
 
   try {
@@ -90,7 +116,7 @@ test('returns resolution events for an item', async () => {
     await itemController.getResolutions({ params: { id: 'item-123' }, user: { id: 'staff-1' } }, res, () => { throw new Error('next should not be called'); });
     assert.equal(receivedId, 'item-123');
     assert.equal(res.statusCode, 200);
-    assert.deepEqual(res.payload, [ { id: 'res-1', item_id: 'item-123', resolved_by: 'staff-1', notes: 'Test', created_at: '2026-09-22T00:00:00Z' } ]);
+    assert.deepEqual(res.payload, [{ id: 'res-1', item_id: 'item-123', resolved_by: 'staff-1', notes: 'Test', created_at: '2026-09-22T00:00:00Z' }]);
   } finally {
     Item.getResolutions = original;
   }
