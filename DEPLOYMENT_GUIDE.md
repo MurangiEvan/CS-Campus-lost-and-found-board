@@ -5,11 +5,11 @@
 ### Server (.env)
 
 ```env
-PORT=3000
+PORT=3001
 NODE_ENV=production
 JWT_SECRET=replace-with-secure-random-string
 DATABASE_URL=postgresql://user:password@host:5432/database?sslmode=require
-CORS_ORIGINS=http://localhost:3001,https://your-client-domain.com,.vercel.app,.onrender.com
+CORS_ORIGINS=http://localhost:3000,https://your-client-domain.com,.vercel.app,.onrender.com
 COOKIE_SAMESITE=none
 COOKIE_SECURE=true
 ```
@@ -18,7 +18,7 @@ COOKIE_SECURE=true
 
 ```env
 # Leave this unset in production so the client uses /api/v1 through the Vercel rewrite.
-# For local development use http://localhost:3000/api/v1.
+# For local development use http://localhost:3001/api/v1, or leave unset to use that default.
 NEXT_PUBLIC_API_BASE_URL=
 API_SERVER_URL=https://your-api-domain.com
 NEXT_PUBLIC_APP_URL=https://your-client-domain.com
@@ -48,6 +48,8 @@ UPDATE items SET search_vector = to_tsvector('simple', coalesce(title, '') || ' 
 ```
 
 ## 3. Start the API
+
+The local API defaults to port `3001`; the Next.js client defaults to port `3000`.
 
 ```bash
 cd server

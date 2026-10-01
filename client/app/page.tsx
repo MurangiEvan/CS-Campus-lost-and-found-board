@@ -2,7 +2,6 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Button, SectionHeader } from "@/components/ui";
 
 type ReportType = "lost" | "found";
 type ItemCategory = "cards" | "keys" | "phones" | "bags" | "other";
@@ -46,6 +45,21 @@ type NotificationItem = {
   highlight: boolean;
 };
 
+type AuditEvent = {
+  id: string;
+  user_id: string;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  created_at: string;
+};
+
+type ReleaseVerification = {
+  student_id_verified: boolean;
+  proof_of_ownership_confirmed: boolean;
+  item_condition_noted: boolean;
+};
+
 type ApiItem = {
   id: string;
   title: string;
@@ -60,13 +74,13 @@ type ApiItem = {
   image_url?: string | null;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || (process.env.NODE_ENV === "production" ? "/api/v1" : "http://localhost:3000/api/v1");
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || (process.env.NODE_ENV === "production" ? "/api/v1" : "http://localhost:3001/api/v1");
 const categoryIcon: Record<string, string> = { lost: "↗", found: "⌕", cards: "▣", keys: "⌕", phones: "▤", bags: "□", other: "•" };
 const defaultContactPreferences: ContactPreferences = { emailUpdates: true, matchAlerts: true };
 
 function viewFromPath(pathname: string): View {
   const segment = pathname.split("/")[2];
-  return ["browse", "reports", "notifications", "account"].includes(segment) ? segment as View : "home";
+  return ["browse", "reports", "notifications", "account", "forgot-password", "reset-password"].includes(segment) ? segment as View : "home";
 }
 
 function getStoredToken() {
@@ -148,9 +162,8 @@ export default function Home() {
   const [resolutionsOpen, setResolutionsOpen] = useState(false);
   const [resolutionsError, setResolutionsError] = useState("");
   const [userSearchOpen, setUserSearchOpen] = useState(false);
-  const [userSearchResults, setUserSearchResults] = useState<any[]>([]);
   const [auditOpen, setAuditOpen] = useState(false);
-  const [auditEvents, setAuditEvents] = useState<any[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [selectedReassignItemId, setSelectedReassignItemId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -289,20 +302,14 @@ export default function Home() {
     }
   }
 
-  async function openUserSearch() {
-    setUserSearchResults([]);
-    setSelectedReassignItemId(null);
+  async function openUserSearch(itemId?: string) {
+    setSelectedReassignItemId(itemId || null);
     setUserSearchOpen(true);
-  }
-
-  async function performUserSearch(q: string) {
-    const results = await searchUsers(q);
-    setUserSearchResults(results);
   }
 
   async function openAudit() {
     try {
-      const rows = await apiRequest<any[]>('/admin/audit');
+      const rows = await apiRequest<AuditEvent[]>('/admin/audit');
       setAuditEvents(rows);
       setAuditOpen(true);
     } catch {
@@ -311,44 +318,6 @@ export default function Home() {
     }
   }
 
-  // expose quick hooks for SecurityDashboard buttons
-  useEffect(() => {
-    (window as any).__securityOpenUserSearch = (itemId?: string) => { setSelectedReassignItemId(itemId || null); openUserSearch(); };
-    (window as any).__securityOpenAudit = openAudit;
-    return () => {
-      delete (window as any).__securityOpenUserSearch;
-      delete (window as any).__securityOpenAudit;
-    };
-  }, []);
-
-  // Modal components: user search and audit viewer
-  function UserSearchModal({ open, onClose, results, onSelect }: { open: boolean; onClose: () => void; results: any[]; onSelect: (id: string) => void }) {
-    const [query, setQuery] = useState('');
-    useEffect(() => {
-      const timer = setTimeout(() => {
-        if (query.length >= 2) void performUserSearch(query);
-      }, 250);
-      return () => clearTimeout(timer);
-    }, [query]);
-    if (!open) return null;
-    return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">FIND USER</p><h2>Search campus users</h2><label className="search"><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name, email, or number" /></label>{results.length ? <ul className="user-results">{results.map((u) => <li key={u.id}><strong>{u.username}</strong> <small>{u.email || u.student_number || u.staff_number}</small><button onClick={() => { onSelect(u.id); onClose(); }}>Select</button></li>)}</ul> : <p className="empty-state">No users</p>}<div className="modal-footer"><button className="button" onClick={() => onClose()}>Close</button></div></div></div>;
-  }
-
-  function AuditModal({ open, onClose, events }: { open: boolean; onClose: () => void; events: any[] }) {
-    if (!open) return null;
-    return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">AUDIT LOG</p><h2>Recent staff actions</h2>{events.length ? <ul className="audit-list">{events.map((e) => <li key={e.id}><strong>{e.action}</strong> by <small>{e.user_id}</small> — <code>{e.target_type}:{e.target_id}</code><br/><small>{new Date(e.created_at).toLocaleString()}</small></li>)}</ul> : <p className="empty-state">No audit events</p>}<div className="modal-footer"><button className="button" onClick={onClose}>Close</button></div></div></div>;
-  }
-
-  // User search helper for staff: use debounced lookup
-  async function searchUsers(query: string) {
-    if (!query || query.trim().length < 2) return [];
-    try {
-      const results = await apiRequest<any[]>(`/admin/users?q=${encodeURIComponent(query)}`);
-      return results;
-    } catch (e) {
-      return [];
-    }
-  }
 
   // when a user is selected in the modal, call reassign for the selected item id
   function handleUserSelect(userId: string) {
@@ -366,11 +335,13 @@ export default function Home() {
       const image = data.get("image");
       const imageUrl = image instanceof File && image.size ? await readImage(image) : undefined;
       if (imageUrl && imageUrl.length > 90000) throw new Error("Choose an image smaller than 65 KB");
+      const description = String(data.get("description"));
+      const droppedOffBy = String(data.get("dropped_off_by") || "").trim();
       const item = await apiRequest<ApiItem>("/items", {
         method: "POST",
         body: JSON.stringify({
           title: String(data.get("title")),
-          description: String(data.get("description")),
+          description: droppedOffBy ? `${description}\nDropped off by: ${droppedOffBy}` : description,
           category: reportType,
           item_category: String(data.get("item_category") || "other"),
           location: String(data.get("location")),
@@ -381,7 +352,7 @@ export default function Home() {
 
       setItems((current) => [mapApiItem(item), ...current]);
       setShowReport(false);
-      navigateToView("reports");
+      if (user?.account_type !== "staff") navigateToView("reports");
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to create the report");
     } finally {
@@ -395,11 +366,11 @@ export default function Home() {
     setResolutionNotes(item.resolution_notes || "");
   }
 
-  async function resolveItem(id: string, notes = "") {
+  async function resolveItem(id: string, notes = "", verification?: ReleaseVerification) {
     setItemsError("");
     setResolutionBusy(true);
     try {
-      const item = await apiRequest<ApiItem>(`/items/${id}/resolve`, { method: "PATCH", body: JSON.stringify({ notes }) });
+      const item = await apiRequest<ApiItem>(`/items/${id}/resolve`, { method: "PATCH", body: JSON.stringify({ notes, ...(verification ? { verification } : {}) }) });
       const mapped = mapApiItem(item);
       setItems((current) => current.map((entry) => entry.id === id ? mapped : entry));
       setBrowseItems((current) => current.map((entry) => entry.id === id ? mapped : entry));
@@ -544,16 +515,25 @@ export default function Home() {
   }
   if (user.account_type === "staff") {
     return (
-      <SecurityDashboard
-        user={user}
-        items={items}
-        onLogout={logout}
-        onResolve={requestResolution}
-        onLogFound={() => openReport("found")}
-        onViewProtocol={() => setProtocolOpen(true)}
-        onReassign={reassignItem}
-        actionLoading={actionLoading}
-      />
+      <>
+        <SecurityDashboard
+          user={user}
+          items={items}
+          onLogout={logout}
+          onResolve={requestResolution}
+          onLogFound={() => openReport("found")}
+          onViewProtocol={() => setProtocolOpen(true)}
+          onOpenAudit={openAudit}
+          onReassign={(itemId) => void openUserSearch(itemId)}
+          actionLoading={actionLoading}
+        />
+        {itemsError && <div className="security-feedback error-banner" role="alert">{itemsError}</div>}
+        {showReport && <ReportModal type={reportType} securityIntake onClose={() => setShowReport(false)} onSubmit={submitReport} />}
+        {pendingResolution && <ResolutionModal item={pendingResolution} requireChecks notes={resolutionNotes} setNotes={setResolutionNotes} busy={resolutionBusy} error={itemsError} onClose={() => setPendingResolution(null)} onConfirm={(notes, verification) => void resolveItem(pendingResolution.id, notes ?? resolutionNotes, verification)} />}
+        {protocolOpen && <ProtocolModal onClose={() => setProtocolOpen(false)} />}
+        {userSearchOpen && <UserSearchModal onClose={() => setUserSearchOpen(false)} onSelect={handleUserSelect} />}
+        {auditOpen && <AuditModal onClose={() => setAuditOpen(false)} events={auditEvents} />}
+      </>
     );
   }
 
@@ -561,6 +541,7 @@ export default function Home() {
     <main className="app-shell">
       <header className="topbar">
         <button className="brand" onClick={() => navigateToView("home")} aria-label="Go to home"><span>UF</span><strong>Campus<span>Link</span></strong></button>
+        {view !== "home" && <button type="button" className="dashboard-back-button" onClick={() => navigateToView("home")}><span aria-hidden="true">←</span>Back to dashboard</button>}
         <nav className="topnav" aria-label="Main navigation">
           <button className={view === "home" ? "active" : ""} onClick={() => navigateToView("home")}>Home</button>
           <button className={view === "browse" ? "active" : ""} onClick={() => navigateToView("browse")}>Browse items</button>
@@ -573,7 +554,7 @@ export default function Home() {
       {itemsError && <div className="error-banner">{itemsError}</div>}
       {itemsLoading && <div className="loading-banner">Loading items…</div>}
 
-      {view === "home" && <HomeView items={items} onBrowse={() => navigateToView("browse")} onReport={openReport} onSelect={setSelectedItem} />}
+      {view === "home" && <HomeView user={user} items={items} onBrowse={() => navigateToView("browse")} onReport={openReport} onSelect={setSelectedItem} />}
       {view === "browse" && <BrowseView items={visibleItems} search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} itemCategory={itemCategory} setItemCategory={setItemCategory} dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} location={location} setLocation={setLocation} showArchived={showArchived} setShowArchived={setShowArchived} loading={browseLoading} onSelect={setSelectedItem} onReport={openReport} />}
       {view === "reports" && <ReportsView items={items.filter((item) => item.user_id === user.id)} onSelect={setSelectedItem} onReport={openReport} />}
       {view === "notifications" && <NotificationsView notifications={notifications} />}
@@ -589,12 +570,51 @@ export default function Home() {
   );
 }
 
-function HomeView({ items, onBrowse, onReport, onSelect }: { items: Item[]; onBrowse: () => void; onReport: (type: ReportType) => void; onSelect: (item: Item) => void }) {
-  return <>
-    <section className="hero"><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p className="hero-copy">A trusted board for reporting lost items, sharing found belongings, and getting them back to the right person.</p><div className="hero-actions"><Button variant="primary" onClick={() => onReport("lost")}>Report lost item <span>→</span></Button><Button variant="secondary" onClick={() => onReport("found")}>Report found item <span>+</span></Button></div></div><div className="hero-note"><span>✦</span><p><strong>Built for campus.</strong><br />Every report helps our community look out for one another.</p></div></section>
-    <section className="section"><SectionHeader eyebrow="Live board" title="Recent on campus" action={<button className="text-button" onClick={onBrowse}>View all <span>↗</span></button>} /><div className="item-grid">{items.slice(0, 3).map((item) => <ItemCard key={item.id} item={item} onClick={() => onSelect(item)} />)}</div></section>
-    <section className="stats"><div><strong>{items.filter((item) => item.status === "active").length}</strong><span>active reports</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>items reunited</span></div><div><strong>24h</strong><span>average response</span></div></section>
-  </>;
+function UserSearchModal({ onClose, onSelect }: { onClose: () => void; onSelect: (id: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [users, setUsers] = useState<Array<{ id: string; username: string; email?: string; student_number?: string; staff_number?: string }>>([]);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (query.trim().length < 2) return;
+
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void apiRequest<Array<{ id: string; username: string; email?: string; student_number?: string; staff_number?: string }>>(`/admin/users?q=${encodeURIComponent(query.trim())}`)
+        .then((results) => {
+          if (active) setUsers(results);
+        })
+        .catch((searchError) => {
+          if (active) setError(searchError instanceof Error ? searchError.message : "Unable to search campus users");
+        });
+    }, 250);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
+
+  return <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="user-search-title"><button className="close" onClick={onClose} aria-label="Close">×</button><p className="eyebrow">FIND USER</p><h2 id="user-search-title">Search campus users</h2><label className="search"><input value={query} onChange={(event) => { setQuery(event.target.value); setUsers([]); setError(""); }} placeholder="Search by name, email, or number" /></label>{error ? <p className="form-error" role="alert">{error}</p> : users.length ? <ul className="user-results">{users.map((user) => <li key={user.id}><strong>{user.username}</strong><small>{user.email || user.student_number || user.staff_number}</small><button onClick={() => { onSelect(user.id); onClose(); }}>Select</button></li>)}</ul> : <p className="empty-state">{query.trim().length < 2 ? "Enter at least 2 characters" : "No matching users"}</p>}<div className="modal-footer"><button className="button" onClick={onClose}>Close</button></div></section></div>;
+}
+
+function AuditModal({ onClose, events }: { onClose: () => void; events: AuditEvent[] }) {
+  return <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="audit-title"><button className="close" onClick={onClose} aria-label="Close">×</button><p className="eyebrow">AUDIT LOG</p><h2 id="audit-title">Recent staff actions</h2>{events.length ? <ul className="audit-list">{events.map((event) => <li key={event.id}><strong>{event.action}</strong> by <small>{event.user_id}</small> — <code>{event.target_type}:{event.target_id}</code><br /><small>{new Date(event.created_at).toLocaleString()}</small></li>)}</ul> : <p className="empty-state">No audit events</p>}<div className="modal-footer"><button className="button" onClick={onClose}>Close</button></div></section></div>;
+}
+
+function HomeView({ user, items, onBrowse, onReport, onSelect }: { user: User; items: Item[]; onBrowse: () => void; onReport: (type: ReportType) => void; onSelect: (item: Item) => void }) {
+  const activeCount = items.filter((item) => item.user_id === user.id && item.status === "active").length;
+  const firstName = user.username.trim().split(/\s+/)[0] || user.username;
+
+  return <section className="student-dashboard">
+    <header className="student-dashboard-header"><div><p>Good morning</p><h1>{firstName} <span aria-hidden="true">👋</span></h1><div><span>{activeCount} active reports</span><span>Campus Security verified</span></div></div><span className="student-dashboard-avatar">{getInitials(user.username)}</span></header>
+    <div className="student-dashboard-content">
+      <div className="student-dashboard-actions"><button className="dark" onClick={() => onReport("lost")}><span aria-hidden="true">⌕</span>Report Lost</button><button className="gold" onClick={() => onReport("found")}><span aria-hidden="true">＋</span>Report Found</button></div>
+      <div className="security-section-heading"><h2>Recent on campus</h2><button className="text-button" onClick={onBrowse}>View all</button></div>
+      <div className="item-grid">{items.slice(0, 3).map((item) => <ItemCard key={item.id} item={item} onClick={() => onSelect(item)} />)}</div>
+      {!items.length && <div className="empty-state"><h3>No recent reports</h3><p>New campus reports will appear here.</p></div>}
+    </div>
+  </section>;
 }
 
 function BrowseView({ items, search, setSearch, filter, setFilter, itemCategory, setItemCategory, dateFrom, setDateFrom, dateTo, setDateTo, location, setLocation, showArchived, setShowArchived, loading, onSelect, onReport }: { items: Item[]; search: string; setSearch: (value: string) => void; filter: "all" | ReportType; setFilter: (value: "all" | ReportType) => void; itemCategory: "all" | ItemCategory; setItemCategory: (value: "all" | ItemCategory) => void; dateFrom: string; setDateFrom: (value: string) => void; dateTo: string; setDateTo: (value: string) => void; location: string; setLocation: (value: string) => void; showArchived: boolean; setShowArchived: (value: boolean) => void; loading: boolean; onSelect: (item: Item) => void; onReport: (type: ReportType) => void }) {
@@ -619,14 +639,61 @@ function Notice({ icon, title, text, time, highlight = false }: { icon: string; 
 
 function ItemCard({ item, onClick }: { item: Item; onClick: () => void }) { return <button className="item-card" onClick={onClick}><span className="item-symbol">{categoryIcon[item.item_category || item.category]}</span><span className="item-content"><strong>{item.title}</strong><span>{item.location} <i>·</i> {formatDate(item.date_event)}</span></span><span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span></button>; }
 
-function ReportModal({ type, onClose, onSubmit }: { type: ReportType; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) { return <div className="modal-backdrop"><form className="modal" onSubmit={onSubmit}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">NEW REPORT</p><h2>Report {type} item</h2><p className="modal-copy">Share a few details so the campus community can help.</p><label>Item name<input name="title" required placeholder={type === "lost" ? "e.g. Black iPhone 14" : "e.g. Brown leather wallet"} /></label><label>Description<textarea name="description" required placeholder="Include useful identifying details" /></label><label>Item type<select name="item_category" defaultValue="other"><option value="cards">Cards</option><option value="keys">Keys</option><option value="phones">Phones</option><option value="bags">Bags</option><option value="other">Other</option></select></label><label>{type === "lost" ? "Last seen location" : "Found at"}<select name="location" required defaultValue=""><option value="" disabled>Select a campus location</option><option>Library</option><option>Campus Security Desk</option><option>Student Centre</option><option>Main Quad</option><option>Residence Hall</option><option>Dining Hall</option><option>Lecture Building</option></select></label><label>Date {type === "lost" ? "lost" : "found"}<input name="date_event" type="date" required /></label><label className="photo-input"><span>＋</span> Add a photo<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label><button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit">Submit {type} item report <span>→</span></button></form></div>; }
+function ReportModal({ type, securityIntake = false, onClose, onSubmit }: { type: ReportType; securityIntake?: boolean; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+  return <div className="modal-backdrop"><form className={`modal report-modal ${securityIntake ? "security-intake-modal" : ""}`} onSubmit={onSubmit}>
+    <button type="button" className="close" onClick={onClose} aria-label="Close">×</button>
+    <p className="eyebrow">{securityIntake ? "CAMPUS SECURITY" : "NEW REPORT"}</p>
+    <h2>{securityIntake ? "Log found item" : `Report ${type} item`}</h2>
+    <p className="modal-copy">{securityIntake ? "Record the found item and where it is being held." : "Share a few details so the campus community can help."}</p>
+    <label>{securityIntake ? "Item description" : "Item name"}<input name="title" required placeholder={type === "lost" ? "e.g. Black iPhone 14" : "e.g. Brown leather wallet"} /></label>
+    <label>{securityIntake ? "Identifying details" : "Description"}<textarea name="description" required placeholder="Include useful identifying details" /></label>
+    <label>Item type<select name="item_category" defaultValue="other"><option value="cards">Cards</option><option value="keys">Keys</option><option value="phones">Phones</option><option value="bags">Bags</option><option value="other">Other</option></select></label>
+    {securityIntake ? <>
+      <label>Dropped off by<input name="dropped_off_by" placeholder="Student name or number" /></label>
+      <label>Date received<input name="date_event" type="date" required /></label>
+      <label>Storage location<input name="location" required placeholder="Shelf or bin reference" /></label>
+    </> : <>
+      <label>{type === "lost" ? "Last seen location" : "Found at"}<select name="location" required defaultValue=""><option value="" disabled>Select a campus location</option><option>Library</option><option>Campus Security Desk</option><option>Student Centre</option><option>Main Quad</option><option>Residence Hall</option><option>Dining Hall</option><option>Lecture Building</option></select></label>
+      <label>Date {type === "lost" ? "lost" : "found"}<input name="date_event" type="date" required /></label>
+    </>}
+    <label className="photo-input"><span>＋</span> Add an optional photo<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label>
+    <button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit">{securityIntake ? "Submit item intake" : `Submit ${type} item report`} <span>→</span></button>
+  </form></div>;
+}
 
 function ItemModal({ item, canManage, canResolve, onClose, onResolve, onDelete, onUpdate }: { item: Item; canManage: boolean; canResolve: boolean; onClose: () => void; onResolve: (item: Item) => void; onDelete: (id: string) => void; onUpdate: (id: string, updates: { title: string; description: string; location: string; date_event: string }) => void }) { const [editing, setEditing] = useState(false); return <div className="modal-backdrop"><div className="modal detail-modal"><button className="close" onClick={onClose}>×</button>{item.image_url ? <img className="detail-image" src={item.image_url} alt={item.title} /> : <div className="detail-image">{categoryIcon[item.item_category || item.category]}</div>}<span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span>{editing ? <form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); onUpdate(item.id, { title: String(data.get("title")), description: String(data.get("description")), location: String(data.get("location")), date_event: String(data.get("date_event")) }); setEditing(false); }}><label>Title<input name="title" defaultValue={item.title} required /></label><label>Description<textarea name="description" defaultValue={item.description} required /></label><label>Location<input name="location" defaultValue={item.location} required /></label><label>Date<input name="date_event" type="date" defaultValue={item.date_event} required /></label><button className="button dark" type="submit">Save changes</button></form> : <><h2>{item.title}</h2><p className="detail-category">{item.category === "lost" ? "Lost item" : "Found item"} · Reported by {item.reporter || "Campus user"}</p><p>{item.description}</p><div className="detail-meta"><span>⌖ <b>Location</b> {item.location}</span><span>▣ <b>Date</b> {formatDate(item.date_event)}</span></div><p className="privacy-note">Bring your student card and proof of ownership to Campus Security.</p>{item.status === "active" && canResolve && <button className="button dark" onClick={() => onResolve(item)}>Mark as resolved</button>}{item.status === "active" && canManage && <div className="detail-actions"><button className="button gold" onClick={() => setEditing(true)}>Edit report</button><button className="text-button" onClick={() => onDelete(item.id)}>Delete report</button></div>}</>}</div></div>; }
 
-function ResolutionModal({ item, notes, setNotes, busy, error, onClose, onConfirm }: { item: Item; notes: string; setNotes: (value: string) => void; busy: boolean; error: string; onClose: () => void; onConfirm: () => void }) {
-  return <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="resolution-title"><button className="close" onClick={onClose} disabled={busy} aria-label="Close">×</button><p className="eyebrow">CONFIRM COLLECTION</p><h2 id="resolution-title">Release {item.title}?</h2><p className="modal-copy">Confirm the item has been returned to its owner. This will move the report to resolved history.</p><label>Resolution notes (optional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="e.g. Collected at the Security Desk" maxLength={1000} /></label>{error && <p className="form-error" role="alert">{error}</p>}<div className="detail-actions"><button className="button dark" onClick={onConfirm} disabled={busy}>{busy ? "Saving…" : "Confirm release"}</button><button className="text-button" onClick={onClose} disabled={busy}>Cancel</button></div></section></div>;
-}function ProtocolModal({ onClose }: { onClose: () => void }) {
-  return <div className="modal-backdrop"><div className="modal"><button className="close" onClick={onClose}>×</button><p className="eyebrow">SECURITY PROTOCOL</p><h2>Release checklist</h2><p className="modal-copy">Complete each check before releasing an item to a student.</p><ul className="protocol-list"><li>Verify the claimant matches the item description and campu s record.</li><li>Confirm proof of ownership or a valid student identification match.</li><li>Sign the release and note the responsible staff member for audit.</li><li>Mark the item as resolved only after collection is confirmed.</li></ul></div></div>;
+function ResolutionModal({ item, requireChecks = false, notes, setNotes, busy, error, onClose, onConfirm }: { item: Item; requireChecks?: boolean; notes: string; setNotes: (value: string) => void; busy: boolean; error: string; onClose: () => void; onConfirm: (notes?: string, verification?: ReleaseVerification) => void }) {
+  const [checks, setChecks] = useState({ studentId: false, ownership: false, condition: false });
+  const checksComplete = Object.values(checks).every(Boolean);
+
+  function confirmRelease() {
+    const verification: ReleaseVerification | undefined = requireChecks ? {
+      student_id_verified: checks.studentId,
+      proof_of_ownership_confirmed: checks.ownership,
+      item_condition_noted: checks.condition,
+    } : undefined;
+    onConfirm(notes.trim(), verification);
+  }
+
+  return <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="resolution-title">
+    <button className="close" onClick={onClose} disabled={busy} aria-label="Close">×</button>
+    <p className="eyebrow">COLLECTION VERIFICATION</p>
+    <h2 id="resolution-title">Release {item.title}</h2>
+    <p className="modal-copy">{item.location} · Received {formatDate(item.date_event)}. Complete every check before releasing this item from Campus Security custody.</p>
+    {requireChecks && <fieldset className="release-checklist"><legend>Verification checklist</legend>
+      <label className={checks.studentId ? "checked" : ""}><input type="checkbox" checked={checks.studentId} onChange={(event) => setChecks({ ...checks, studentId: event.target.checked })} />Student ID verified</label>
+      <label className={checks.ownership ? "checked" : ""}><input type="checkbox" checked={checks.ownership} onChange={(event) => setChecks({ ...checks, ownership: event.target.checked })} />Proof of ownership confirmed</label>
+      <label className={checks.condition ? "checked" : ""}><input type="checkbox" checked={checks.condition} onChange={(event) => setChecks({ ...checks, condition: event.target.checked })} />Item condition noted</label>
+    </fieldset>}
+    <label>Security notes (optional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add condition or handover notes" maxLength={1000} /></label>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <div className="detail-actions"><button className={`button ${requireChecks ? "gold" : "dark"}`} onClick={confirmRelease} disabled={busy || (requireChecks && !checksComplete)}>{busy ? "Saving…" : "Release item"}</button><button className="text-button" onClick={onClose} disabled={busy}>Cancel</button></div>
+  </section></div>;
+}
+
+function ProtocolModal({ onClose }: { onClose: () => void }) {
+  return <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="protocol-title"><button className="close" onClick={onClose} aria-label="Close">×</button><p className="eyebrow">SECURITY PROTOCOL</p><h2 id="protocol-title">Release checklist</h2><p className="modal-copy">Complete each check before releasing an item to a student.</p><ul className="protocol-list"><li>Verify the claimant matches the item description and campus record.</li><li>Confirm proof of ownership or a valid student identification match.</li><li>Note item condition and the responsible staff member in the release record.</li><li>Mark the item resolved only after collection is confirmed.</li></ul></section></div>;
 }
 
 function ForgotPasswordPage({ onForgot, error, message, onBack }: { onForgot: (event: FormEvent<HTMLFormElement>) => void; error: string; message: string; onBack: () => void }) {
@@ -665,12 +732,66 @@ function LoginPage({ onLogin, onRegister, error, message, onForgot }: { onLogin:
   }
 
   const isRegistering = mode === "register";
-  return <main className="login-shell"><div className="login-art"><button className="brand" aria-label="CampusLink"><span>UF</span><strong>Campus<span>Link</span></strong></button><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p>A trusted board for the campus community.</p></div><small>Lost and found, together.</small></div><section className="login-panel"><div className="login-heading"><p className="eyebrow">{isRegistering ? "JOIN CAMPUSLINK" : "WELCOME BACK"}</p><h2>{isRegistering ? "Create your account" : "Sign in to CampusLink"}</h2><p>{isRegistering ? "Use your campus details to join the board." : "Use your campus credentials to continue."}</p></div><div className="account-switch"><button type="button" className={accountType === "student" ? "selected" : ""} onClick={() => setAccountType("student")}>Student</button><button type="button" className={accountType === "staff" ? "selected" : ""} onClick={() => setAccountType("staff")}>Campus Security</button></div><form onSubmit={submit} className="login-form">{isRegistering && <div className="name-fields"><label>Name<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="First name" autoComplete="given-name" /></label><label>Surname<input required value={surname} onChange={(event) => setSurname(event.target.value)} placeholder="Surname" autoComplete="family-name" /></label></div>}{isRegistering && <label>{accountType === "student" ? "Student email" : "Staff email"}<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@tut4life.ac.za" autoComplete="email" /></label>}<label>{accountType === "student" ? "Student number" : "Staff number"}<input required value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder={accountType === "student" ? "e.g. 202312345" : "e.g. SEC-001"} autoComplete={accountType === "student" ? "username" : "off"} /></label><label>Password<input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" autoComplete="current-password" /></label>{error && <p className="error-message">{error}</p>}{message && <p className="success-message">{message}</p>}<button type="submit" className="button dark" disabled={busy}>{busy ? "Please wait..." : isRegistering ? "Create account" : "Sign in"}</button><button type="button" className="text-button" onClick={() => setMode(isRegistering ? "login" : "register")}>{isRegistering ? "Already have an account? Sign in" : "Need an account? Create one"}</button></form></section></main>;
+  return <main className="login-shell"><div className="login-art"><button className="brand" aria-label="CampusLink"><span>UF</span><strong>Campus<span>Link</span></strong></button><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p>A trusted board for the campus community.</p></div><small>Lost and found, together.</small></div><section className="login-panel"><div className="login-heading"><p className="eyebrow">{isRegistering ? "JOIN CAMPUSLINK" : "WELCOME BACK"}</p><h2>{isRegistering ? "Create your account" : "Sign in to CampusLink"}</h2><p>{isRegistering ? "Use your campus details to join the board." : "Use your campus credentials to continue."}</p></div><div className="account-switch"><button type="button" className={accountType === "student" ? "selected" : ""} onClick={() => setAccountType("student")}>Student</button><button type="button" className={accountType === "staff" ? "selected" : ""} onClick={() => setAccountType("staff")}>Campus Security</button></div><form onSubmit={submit} className="login-form">{isRegistering && <div className="name-fields"><label>Name<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="First name" autoComplete="given-name" /></label><label>Surname<input required value={surname} onChange={(event) => setSurname(event.target.value)} placeholder="Surname" autoComplete="family-name" /></label></div>}{isRegistering && <label>{accountType === "student" ? "Student email" : "Staff email"}<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@tut4life.ac.za" autoComplete="email" /></label>}<label>{accountType === "student" ? "Student number" : "Staff number"}<input required value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder={accountType === "student" ? "e.g. 202312345" : "e.g. SEC-001"} autoComplete={accountType === "student" ? "username" : "off"} /></label><label>Password<input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" autoComplete="current-password" /></label>{!isRegistering && <button type="button" className="text-button login-forgot-link" onClick={onForgot}>Forgot password?</button>}{error && <p className="error-message">{error}</p>}{message && <p className="success-message">{message}</p>}<button type="submit" className="button dark" disabled={busy}>{busy ? "Please wait..." : isRegistering ? "Create account" : "Sign in"}</button><button type="button" className="text-button" onClick={() => setMode(isRegistering ? "login" : "register")}>{isRegistering ? "Already have an account? Sign in" : "Need an account? Create one"}</button></form></section></main>;
 }
 
-function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol, onReassign, actionLoading }: { user: User; items: Item[]; onLogout: () => void; onResolve: (item: Item) => void; onLogFound: () => void; onViewProtocol: () => void; onReassign?: (id: string, newUserId: string) => Promise<void> | void; actionLoading?: boolean }) {
-  const activeItems = items.filter((item) => item.status === "active");
-  return <main className="security-shell"><header className="security-header"><div><p className="eyebrow">CAMPUS SECURITY</p><h1>Good morning, {user.username}</h1><p>Custody and collection overview</p></div><div className="security-actions"><span className="security-avatar">{getInitials(user.username)}</span><button onClick={onLogout}>Sign out</button></div></header><section className="security-content"><div className="security-stats"><div><strong>{activeItems.length}</strong><span>In custody</span></div><div><strong>{items.filter((item) => item.category === "lost" && item.status === "active").length}</strong><span>Awaiting matches</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div><div className="security-title"><div><p className="eyebrow">TODAY&apos;S WORK QUEUE</p><h2>Manage items</h2></div><button className="button gold" onClick={onLogFound}>+ Log found item</button></div><div className="security-layout"><div className="custody-list">{activeItems.map((item) => <article className="custody-card" key={item.id}><span className="item-symbol">{categoryIcon[item.category]}</span><div><strong>{item.title}</strong><p>{item.location} · Received {formatDate(item.date_event)}</p><span className="status active">Awaiting collection</span></div><button onClick={() => onResolve(item)} disabled={Boolean(actionLoading)}>{actionLoading ? "Working…" : "Release item"}</button></article>)}</div><aside className="security-note"><span>✓</span><h3>Release checklist</h3><p>Verify student ID, proof of ownership, and item condition before releasing an item.</p><button className="text-button" onClick={onViewProtocol}>View protocol ↗</button></aside></div></section></main>;}
+function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol, onOpenAudit, onReassign, actionLoading }: { user: User; items: Item[]; onLogout: () => void; onResolve: (item: Item) => void; onLogFound: () => void; onViewProtocol: () => void; onOpenAudit: () => void; onReassign: (id: string) => void; actionLoading?: boolean }) {
+  const [activeView, setActiveView] = useState<"dashboard" | "items" | "release">("dashboard");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | ItemStatus>("all");
+  const custodyItems = items.filter((item) => item.category === "found" && item.status === "active");
+  const releaseItems = custodyItems;
+  const filteredItems = items.filter((item) => {
+    const matchesStatus = statusFilter === "all" || item.status === statusFilter;
+    const query = search.trim().toLowerCase();
+    const matchesSearch = !query || `${item.title} ${item.description} ${item.location}`.toLowerCase().includes(query);
+    return matchesStatus && matchesSearch;
+  });
+  const recentItems = custodyItems.slice(0, 3);
+  const firstName = user.username.trim().split(/\s+/)[0] || user.username;
+
+  function itemRow(item: Item, showReassign = false) {
+    const status = item.status === "resolved" ? "Released" : item.category === "found" ? "Awaiting collection" : "Lost report";
+    return <article className="security-item-card" key={item.id}>
+      <span className="item-symbol">{categoryIcon[item.item_category || item.category]}</span>
+      <div className="security-item-content"><strong>{item.title}</strong><span>{item.item_category || item.category} · {formatDate(item.date_event)} · {item.location}</span><span className={`status ${item.status}`}>{status}</span></div>
+      <div className="security-item-actions">
+        {item.status === "active" && item.category === "found" && <button className="button gold" onClick={() => onResolve(item)} disabled={Boolean(actionLoading)}>{actionLoading ? "Working…" : "Release"}</button>}
+        {showReassign && item.status === "active" && <button className="text-button" onClick={() => onReassign(item.id)}>Reassign</button>}
+      </div>
+    </article>;
+  }
+
+  return <main className="security-shell">
+    <header className="security-header"><div className="security-header-top"><div><p className="eyebrow">CAMPUS SECURITY</p><h1>Good morning, {firstName}</h1><div className="security-header-meta"><span>{items.filter((item) => item.status === "active").length} active reports</span><span>Campus Security verified</span></div></div><div className="security-actions"><span className="security-avatar">{getInitials(user.username)}</span><button onClick={onLogout}>Sign out</button></div></div><div className="security-stats"><div><strong>{custodyItems.length}</strong><span>In custody</span></div><div><strong>{items.filter((item) => item.category === "lost" && item.status === "active").length}</strong><span>Awaiting</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div></header>
+    <section className="security-content">
+      {activeView !== "dashboard" && <button type="button" className="dashboard-back-button security-back-button" onClick={() => setActiveView("dashboard")}><span aria-hidden="true">←</span>Back to dashboard</button>}
+      {activeView === "dashboard" && <>
+        <div className="security-quick-actions"><button className="security-quick-action dark" onClick={onLogFound}><span aria-hidden="true">＋</span>Log new item</button><button className="security-quick-action gold" onClick={() => setActiveView("release")}><span aria-hidden="true">✓</span>Release item</button></div>
+        <div className="security-section-heading"><h2>Recently received</h2><button className="text-button" onClick={() => setActiveView("items")}>View all</button></div>
+        <div className="custody-list">{recentItems.length ? recentItems.map((item) => itemRow(item)) : <div className="empty-state"><h3>No items in custody</h3><p>Found items recorded by Campus Security will appear here.</p></div>}</div>
+        <div className="security-note"><span aria-hidden="true">✓</span><div><h3>Collection verification</h3><p>Verify student ID, proof of ownership, and item condition before releasing an item.</p></div><button className="text-button" onClick={onViewProtocol}>View protocol</button></div>
+      </>}
+      {activeView === "items" && <>
+        <div className="security-section-heading"><div><p className="eyebrow">CUSTODY QUEUE</p><h2>Manage items</h2></div><button className="button gold" onClick={onLogFound}>＋ Log found item</button></div>
+        <div className="security-toolbar"><label className="search"><span aria-hidden="true">⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search items or storage ref..." aria-label="Search managed items" /></label><div className="filters" aria-label="Filter by status">{(["all", "active", "resolved"] as const).map((status) => <button key={status} className={statusFilter === status ? "selected" : ""} onClick={() => setStatusFilter(status)}>{status === "all" ? "All" : status === "active" ? "Awaiting" : "Released"}</button>)}</div></div>
+        <p className="security-result-count">{filteredItems.length} items currently in the queue</p>
+        <div className="custody-list">{filteredItems.length ? filteredItems.map((item) => itemRow(item, true)) : <div className="empty-state"><h3>No items found</h3><p>Try another search or status filter.</p></div>}</div>
+      </>}
+      {activeView === "release" && <>
+        <div className="security-section-heading"><div><p className="eyebrow">COLLECTION QUEUE</p><h2>Release item</h2></div><button className="text-button" onClick={onViewProtocol}>View protocol</button></div>
+        <p className="security-result-count">Select a found item to verify collection and record its release.</p>
+        <div className="custody-list">{releaseItems.length ? releaseItems.map((item) => itemRow(item)) : <div className="empty-state"><h3>Nothing is awaiting collection</h3><p>New found-item intake will be listed here.</p></div>}</div>
+      </>}
+    </section>
+    <nav className="security-nav" aria-label="Security navigation">
+      <button className={activeView === "dashboard" ? "active" : ""} onClick={() => setActiveView("dashboard")} aria-current={activeView === "dashboard" ? "page" : undefined}><span aria-hidden="true">⌂</span>Dashboard</button>
+      <button className={activeView === "items" ? "active" : ""} onClick={() => setActiveView("items")} aria-current={activeView === "items" ? "page" : undefined}><span aria-hidden="true">▣</span>Items</button>
+      <button className={activeView === "release" ? "active" : ""} onClick={() => setActiveView("release")} aria-current={activeView === "release" ? "page" : undefined}><span aria-hidden="true">✓</span>Release</button>
+      <button onClick={onOpenAudit}><span aria-hidden="true">◷</span>Activity</button>
+    </nav>
+  </main>;
+}
 
 function getInitials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);

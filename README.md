@@ -1,6 +1,20 @@
 # CS-Campus-lost-and-found-board
 The problem: Students regularly lose phones, cards, keys, and bags on campus, with no central place to  report or search for them — items get handed to random offices and never reunited with their owners.
 
+## Local development
+
+Install dependencies in the root, `server`, and `client` directories. Create the ignored file `server/.env` with your local PostgreSQL connection and a development JWT secret:
+
+```env
+PORT=3001
+DATABASE_URL=postgresql://<db-user>:<db-password>@localhost:5432/lost_and_found
+JWT_SECRET=<long-random-development-secret>
+```
+
+Create the database, apply `server/schema.sql`, and start both services from the repository root with `npm run dev`. Do not commit `server/.env`. Check `http://localhost:3001/ready`; sign-in requires it to report `READY`.
+
+The Next.js client runs at `http://localhost:3000`; Express defaults to `http://localhost:3001`. Keep the API on port `3001` locally so the client does not send API requests to the Next.js server.
+
 ## Deployment notes
 
 When deploying the server and client to different hosts (for example, Vercel and Render), set these environment variables for the server to allow cross-origin requests and cookies:

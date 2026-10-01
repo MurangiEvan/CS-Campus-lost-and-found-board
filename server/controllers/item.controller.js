@@ -129,14 +129,29 @@ const deleteItem = async (req, res, next) => {
 const resolveItem = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const accountType = req.user.accountType || 'student';
     const notes = typeof req.body?.notes === 'string' ? req.body.notes.trim().slice(0, 1000) : '';
-    const item = await Item.markAsResolved(id, req.user.id, req.user.accountType || 'student', notes);
+    const verification = req.body?.verification;
+
+    if (accountType === 'staff' && (
+      verification?.student_id_verified !== true ||
+      verification?.proof_of_ownership_confirmed !== true ||
+      verification?.item_condition_noted !== true
+    )) {
+      return res.status(400).json({ error: 'Complete every collection verification check before release' });
+    }
+
+    const verificationNote = accountType === 'staff'
+      ? 'Verification completed: Student ID verified; proof of ownership confirmed; item condition noted.'
+      : '';
+    const resolutionNotes = [notes, verificationNote].filter(Boolean).join('\n');
+    const item = await Item.markAsResolved(id, req.user.id, accountType, resolutionNotes);
     if (!item) {
       return res.status(403).json({ error: 'Forbidden: you cannot resolve this item' });
     }
     try {
       const { recordAudit } = require('./admin.controller');
-      await recordAudit(req.user.id, 'resolve_item', 'item', id, { notes: notes || null });
+      await recordAudit(req.user.id, 'resolve_item', 'item', id, { notes: resolutionNotes || null });
     } catch (e) {
       // ignore
     }
