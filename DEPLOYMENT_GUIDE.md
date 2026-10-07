@@ -21,7 +21,7 @@ S3_PUBLIC_BASE_URL=https://images.your-domain.com/
 IMAGE_UPLOAD_MAX_BYTES=5242880
 ```
 
-In production, `CORS_ORIGINS` is required and must contain exact trusted browser origins, comma-separated, with no wildcard or domain suffix. State-changing API requests also require an exact matching `Origin` header; do not disable this check for cookie-authenticated requests. Keep storage credentials only in the server environment. `S3_ENDPOINT` is optional for AWS S3 and should be set for compatible services such as MinIO or another S3 API provider. `S3_PUBLIC_BASE_URL` must point at the public-read bucket or CDN URL prefix and must use HTTPS.
+In production, `CORS_ORIGINS` may be omitted only when using the default Vercel origin shown above; that exact origin is the built-in fallback. For a custom frontend domain, set `CORS_ORIGINS` to its exact HTTPS origin(s), comma-separated, with no wildcard or domain suffix. State-changing API requests also require an exact matching `Origin` header; do not disable this check for cookie-authenticated requests. Production cookies default to `SameSite=None; Secure` for cross-site Vercel-to-Render requests. Keep storage credentials only in the server environment. `S3_ENDPOINT` is optional for AWS S3 and should be set for compatible services such as MinIO or another S3 API provider. `S3_PUBLIC_BASE_URL` must point at the public-read bucket or CDN URL prefix and must use HTTPS.
 
 Login stores the session only in the `campuslink_session` HttpOnly cookie; it does not return a JWT in JSON or store a token in browser storage. The client sends API requests with credentials enabled, so configure `COOKIE_SAMESITE=none` and `COOKIE_SECURE=true` for cross-site HTTPS deployments.
 

@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/user.model');
 const { jwtSecret, jwtExpiration } = require('../config/auth');
+const { getCookieSameSite } = require('../config/deployment');
 const crypto = require('crypto');
 const emailUtils = require('../utils/email');
 
@@ -88,7 +89,7 @@ const login = async (req, res, next) => {
 
     res.cookie('campuslink_session', token, {
       httpOnly: true,
-      sameSite: process.env.COOKIE_SAMESITE || 'lax',
+      sameSite: getCookieSameSite(),
       secure: process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production',
       maxAge: 24 * 60 * 60 * 1000,
     });
@@ -109,7 +110,7 @@ const login = async (req, res, next) => {
 };
 
 const logout = (req, res) => {
-  res.clearCookie('campuslink_session', { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
+  res.clearCookie('campuslink_session', { httpOnly: true, sameSite: getCookieSameSite(), secure: process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production' });
   res.json({ message: 'Logged out' });
 };
 

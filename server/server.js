@@ -9,14 +9,11 @@ const adminRoutes = require('./routes/admin.routes');
 const uploadRoutes = require('./routes/upload.routes');
 const { errorMiddleware } = require('./middleware/error.middleware');
 const { createTrustedOriginGuard } = require('./middleware/origin.middleware');
+const { getAllowedOrigins } = require('./config/deployment');
 const db = require('./config/db');
 
 const app = express();
-if (process.env.NODE_ENV === 'production' && !process.env.CORS_ORIGINS) {
-  throw new Error('CORS_ORIGINS must explicitly list trusted production origins');
-}
-const rawCors = process.env.CORS_ORIGINS || 'http://localhost:3000,https://cs-campus-lost-and-found-board.vercel.app';
-const allowedOrigins = rawCors.split(',').map((origin) => origin.trim()).filter(Boolean);
+const allowedOrigins = getAllowedOrigins();
 const rateLimitedAuthPaths = new Set(['/register', '/login', '/forgot-password', '/reset-password']);
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

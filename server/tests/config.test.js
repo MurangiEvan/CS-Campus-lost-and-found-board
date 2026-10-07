@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const authModulePath = require.resolve('../config/auth');
 const { createTrustedOriginGuard } = require('../middleware/origin.middleware');
+const { getAllowedOrigins, getCookieSameSite } = require('../config/deployment');
 
 test('production requires an explicit JWT secret', () => {
   const previousNodeEnv = process.env.NODE_ENV;
@@ -56,4 +57,17 @@ test('state-changing requests require an exact trusted Origin', () => {
   nextCalled = false;
   guard(request('DELETE', 'https://campus.example.test'), response(), () => { nextCalled = true; });
   assert.equal(nextCalled, true);
+});
+
+test('production deployment defaults to the exact Vercel origin and cross-site cookies', () => {
+  assert.deepEqual(getAllowedOrigins({ NODE_ENV: 'production' }), ['https://cs-campus-lost-and-found-board.vercel.app']);
+  assert.equal(getCookieSameSite({ NODE_ENV: 'production' }), 'none');
+});
+
+test('deployment environment can override origins and cookie same-site policy', () => {
+  assert.deepEqual(getAllowedOrigins({ CORS_ORIGINS: 'https://campus.example.test, https://admin.example.test' }), [
+    'https://campus.example.test',
+    'https://admin.example.test',
+  ]);
+  assert.equal(getCookieSameSite({ NODE_ENV: 'production', COOKIE_SAMESITE: 'lax' }), 'lax');
 });
