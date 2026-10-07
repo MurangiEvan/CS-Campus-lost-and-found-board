@@ -32,10 +32,12 @@ Out of scope: public social-media sharing, delivery/shipping of items, payments/
 fines, facial recognition or automatic identity verification, native mobile apps, external
 campus identity-provider integration (unless a future change request adds it).
 
-Do not overbuild. Known gaps to close before calling anything "done": the client still reads
-`initialItems` from React state instead of the item API, the stored JWT isn't sent with item
-API requests yet, notifications/contact-preferences/image upload are UI-only, and security's
-"log found item"/"view protocol" controls are presentational placeholders.
+Do not overbuild. Remaining gaps to close before calling anything "done": notifications and
+matches are not persisted as notification/match records; live image uploads require configured
+S3-compatible storage; and deployment/production smoke checks require deployment-owner
+credentials. Browser sessions use the server's HttpOnly cookie; do not move JWTs back into
+browser storage. Security protocol text is informational; checklist values are staff
+attestations, not automatic identity verification.
 
 ## 3. Architecture
 
@@ -52,8 +54,8 @@ API requests yet, notifications/contact-preferences/image upload are UI-only, an
 Use:
 - Next.js client (App Router) — student and security surfaces.
 - Express — REST API, mounted under `/api/v1`.
-- PostgreSQL — `users` and `items` tables (see Data model), plus future notification/
-  contact-preference/match/custody/resolution-event tables.
+- PostgreSQL — `users` and `items` tables (see Data model), plus explicit upload-session,
+  custody-event, and resolution-event tables; future notifications/matches need their own tables.
 - bcrypt — password hashing.
 - JWT — issuance and server-side verification for authenticated routes.
 
@@ -68,7 +70,8 @@ not already approved.
 
 **Item**: `id` (UUID), `title`, `description`, `category`, `location`, `date_event`,
 `user_id` (owning/reporting user, required FK), `image_url` (optional), `status`
-(`active`|`resolved`), `created_at`, `updated_at`.
+(`active`|`resolved`), optional `custody_status`, `storage_location`, and `custodian_user_id`,
+`created_at`, `updated_at`.
 
 Required before saving: duplicate email/student number/staff number rejected; items cannot
 exist without a valid owning user; report owner always derived from the auth token.
@@ -81,14 +84,21 @@ custody events, and resolution history rather than encoding those in client stat
 | Method | Endpoint | Auth | Purpose |
 |---|---|---|---|
 | GET | `/health` | No | Service health check |
-| POST | `/api/v1/auth/register` | No | Register a student or staff user |
-| POST | `/api/v1/auth/login` | No | Authenticate by account type and identifier |
+| POST | `/api/v1/auth/register` | No | Register a student or staff user; requires matching `password` and `confirm_password` |
+| POST | `/api/v1/auth/login` | No | Authenticate with email or campus number and password; sets an HttpOnly cookie, returns user identity only |
+| GET | `/api/v1/auth/session` | Yes | Return the current user identity and database-backed account type |
 | GET | `/api/v1/items` | Product decision | Browse/filter item reports |
-| GET | `/api/v1/items/:id` | Product decision | View one report |
-| POST | `/api/v1/items` | Yes | Create a report |
-| PATCH | `/api/v1/items/:id` | Yes, owner | Update a report |
-| DELETE | `/api/v1/items/:id` | Yes, owner | Delete a report |
-| PATCH | `/api/v1/items/:id/resolve` | Yes, policy-controlled | Resolve/release a report |
+| GET | `/api/v1/items/:id` | Optional | View a report; private custody/resolution fields are omitted |
+| POST | `/api/v1/uploads/presign` | Yes | Create a 5-minute bounded image upload session; returns `upload_id`, form URL, and fields |
+| DELETE | `/api/v1/uploads/:id` | Yes, owner | Cancel and delete an unattached image upload |
+| POST | `/api/v1/items` | Yes | Create a non-custody report; optional image uses `image_upload_id` |
+| POST | `/api/v1/items/intake` | Yes, staff | Create a found item in custody with storage location and intake event |
+| PATCH | `/api/v1/items/:id` | Yes, owner, non-custody | Update a report; optional image uses `image_upload_id` |
+| DELETE | `/api/v1/items/:id` | Yes, owner, non-custody | Delete a report and its owned image |
+| PATCH | `/api/v1/items/:id/resolve` | Yes, owner or assigned staff | Resolve own non-custody report or release assigned custody item; staff sends all verification checks |
+| PATCH | `/api/v1/items/:id/reassign` | Yes, staff | Reassign custody to another staff account and record a custody event |
+| GET | `/api/v1/items/:id/custody-events` | Yes, staff | Read custody and release history |
+| GET | `/api/v1/items/:id/resolutions` | Yes, owner or staff | Read resolution history |
 
 Any change to request/response fields must update this table and the implementation together.
 

@@ -6,13 +6,26 @@ const cookieParser = require('cookie-parser');
 const authRoutes = require('./routes/auth.routes');
 const itemRoutes = require('./routes/item.routes');
 const adminRoutes = require('./routes/admin.routes');
+const uploadRoutes = require('./routes/upload.routes');
 const { errorMiddleware } = require('./middleware/error.middleware');
+const { createTrustedOriginGuard } = require('./middleware/origin.middleware');
 const db = require('./config/db');
 
 const app = express();
-const rawCors = process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3001,http://localhost:3002,https://cs-campus-lost-and-found-board.vercel.app,.vercel.app';
+if (process.env.NODE_ENV === 'production' && !process.env.CORS_ORIGINS) {
+  throw new Error('CORS_ORIGINS must explicitly list trusted production origins');
+}
+const rawCors = process.env.CORS_ORIGINS || 'http://localhost:3000,https://cs-campus-lost-and-found-board.vercel.app';
 const allowedOrigins = rawCors.split(',').map((origin) => origin.trim()).filter(Boolean);
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false });
+const rateLimitedAuthPaths = new Set(['/register', '/login', '/forgot-password', '/reset-password']);
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skip: (req) => !rateLimitedAuthPaths.has(req.path),
+  handler: (req, res) => res.status(429).json({ error: 'Too many authentication attempts. Please wait 15 minutes and try again.' }),
+});
 const mutationLimiter = rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false });
 
 const corsOptions = {
@@ -23,18 +36,6 @@ const corsOptions = {
     }
 
     if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-      return;
-    }
-
-    const suffixes = allowedOrigins.filter((value) => value.startsWith('.'));
-    const matchesSuffix = suffixes.some((suffix) => origin.endsWith(suffix));
-    if (matchesSuffix) {
-      callback(null, true);
-      return;
-    }
-
-    if (allowedOrigins.includes('*')) {
       callback(null, true);
       return;
     }
@@ -50,6 +51,7 @@ const corsOptions = {
 app.use(helmet());
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
+app.use(createTrustedOriginGuard(allowedOrigins));
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
@@ -58,6 +60,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/v1/auth', authLimiter, authRoutes);
 app.use('/api/v1/items', mutationLimiter, itemRoutes);
 app.use('/api/v1/admin', adminRoutes);
+app.use('/api/v1/uploads', mutationLimiter, uploadRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
@@ -69,7 +72,7 @@ app.get('/ready', async (req, res) => {
     await db.query('SELECT 1');
     res.status(200).json({ status: 'READY', database: 'connected', timestamp: new Date() });
   } catch (error) {
-    res.status(503).json({ status: 'NOT_READY', database: 'unavailable', error: error.message });
+    res.status(503).json({ status: 'NOT_READY', database: 'unavailable', error: 'Database unavailable' });
   }
 });
 

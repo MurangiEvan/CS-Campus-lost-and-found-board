@@ -206,6 +206,12 @@
   font-weight: 500;
 }
 
+.security-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .security-section-heading .eyebrow {
   margin: 0 0 5px;
 }
@@ -328,6 +334,32 @@
 
 .report-modal > label {
   flex: none;
+}
+
+.photo-upload-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #d8e4ec;
+  border-radius: 6px;
+  color: #17436a;
+  font-size: 12px;
+}
+
+.photo-upload-preview img {
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.photo-upload-preview span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .security-intake-modal {

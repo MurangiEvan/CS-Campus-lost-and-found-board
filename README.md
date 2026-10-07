@@ -17,14 +17,19 @@ The Next.js client runs at `http://localhost:3000`; Express defaults to `http://
 
 ## Deployment notes
 
+For production deployment, database migration, S3-compatible image storage, Security custody, and manual verification steps, see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md). Image uploads require server-side storage configuration; the repository does not include a bucket or cloud credentials.
+
 When deploying the server and client to different hosts (for example, Vercel and Render), set these environment variables for the server to allow cross-origin requests and cookies:
 
-- `CORS_ORIGINS`: comma-separated list of allowed origins or suffixes. Examples: `https://my-site.vercel.app,https://app.onrender.com,.vercel.app` (prefix a domain with `.` to allow any subdomain suffix).
+- `CORS_ORIGINS`: comma-separated exact browser origins, for example `https://my-site.vercel.app`. Production requires this setting; wildcards and suffix matching are not enabled.
 - `COOKIE_SAMESITE`: set to `none` when using cross-site cookies (ensure HTTPS). Default is `lax`.
 - `COOKIE_SECURE`: set to `true` in production when cookies must be sent over HTTPS. Default is derived from `NODE_ENV`.
 
 API additions:
 - `GET /api/v1/items/:id/resolutions` — returns resolution history events for an item. Requires auth.
+- `POST /api/v1/uploads/presign` — issues a short-lived, authenticated image upload session.
+- `POST /api/v1/items/intake` and `GET /api/v1/items/:id/custody-events` — staff-only custody intake/history routes.
+- `PATCH /api/v1/items/:id/reassign` — staff-only custody handover to another staff account.
 
 On the client, set `NEXT_PUBLIC_API_BASE_URL` to your API base (e.g. `https://api.my-domain.com/api/v1`). If omitted, the client uses the current origin plus `/api/v1`.
 

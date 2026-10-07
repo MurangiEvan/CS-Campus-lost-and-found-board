@@ -5,7 +5,7 @@ const searchUsers = async (req, res, next) => {
     const { q } = req.query;
     if (!q || q.trim().length < 2) return res.json([]);
     const term = `%${q.trim()}%`;
-    const query = `SELECT id, username, email, account_type, student_number, staff_number FROM users WHERE username ILIKE $1 OR email ILIKE $1 OR student_number ILIKE $1 OR staff_number ILIKE $1 LIMIT 20;`;
+    const query = `SELECT id, username, email, account_type, student_number, staff_number FROM users WHERE account_type = 'staff' AND (username ILIKE $1 OR email ILIKE $1 OR staff_number ILIKE $1) LIMIT 20;`;
     const { rows } = await db.query(query, [term]);
     res.json(rows);
   } catch (error) {

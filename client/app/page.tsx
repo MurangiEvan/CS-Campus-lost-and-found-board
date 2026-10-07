@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 type ReportType = "lost" | "found";
@@ -30,6 +30,10 @@ type Item = {
   reporter?: string;
   image_url?: string | null;
   resolution_notes?: string | null;
+  custodian_name?: string | null;
+  custody_status?: "in_custody" | "released" | null;
+  storage_location?: string | null;
+  custodian_user_id?: string | null;
 };
 
 type ContactPreferences = {
@@ -54,6 +58,32 @@ type AuditEvent = {
   created_at: string;
 };
 
+type CustodyEvent = {
+  id: string;
+  item_id: string;
+  actor_id: string;
+  actor_name: string;
+  event_type: "intake" | "reassigned" | "released";
+  details: {
+    storage_location?: string;
+    from_user_id?: string;
+    to_user_id?: string;
+    verification?: ReleaseVerification;
+    notes?: string | null;
+  };
+  from_user_name?: string | null;
+  to_user_name?: string | null;
+  created_at: string;
+};
+
+type ResolutionEvent = {
+  id: string;
+  item_id: string;
+  resolved_by: string;
+  notes: string | null;
+  created_at: string;
+};
+
 type ReleaseVerification = {
   student_id_verified: boolean;
   proof_of_ownership_confirmed: boolean;
@@ -72,30 +102,34 @@ type ApiItem = {
   status: ItemStatus;
   user_id?: string;
   image_url?: string | null;
+  custodian_name?: string | null;
+  custody_status?: "in_custody" | "released" | null;
+  storage_location?: string | null;
+  custodian_user_id?: string | null;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || (process.env.NODE_ENV === "production" ? "/api/v1" : "http://localhost:3001/api/v1");
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const categoryIcon: Record<string, string> = { lost: "↗", found: "⌕", cards: "▣", keys: "⌕", phones: "▤", bags: "□", other: "•" };
 const defaultContactPreferences: ContactPreferences = { emailUpdates: true, matchAlerts: true };
+
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
 
 function viewFromPath(pathname: string): View {
   const segment = pathname.split("/")[2];
   return ["browse", "reports", "notifications", "account", "forgot-password", "reset-password"].includes(segment) ? segment as View : "home";
 }
 
-function getStoredToken() {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem("campuslink_token") || "";
-}
-
-async function apiRequest<T>(path: string, options: RequestInit = {}, includeBearer = true): Promise<T> {
-  const token = includeBearer ? getStoredToken() : "";
+async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
   });
@@ -103,19 +137,71 @@ async function apiRequest<T>(path: string, options: RequestInit = {}, includeBea
   const data = await response.json().catch(() => ({ error: "Request failed" }));
   if (!response.ok) {
     const message = typeof data?.error === "string" ? data.error : typeof data?.message === "string" ? data.message : "Request failed";
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   return data as T;
 }
 
-function readImage(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Unable to read image"));
-    reader.readAsDataURL(file);
+async function compressImage(file: File) {
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    throw new Error("Choose a JPEG, PNG, or WebP image.");
+  }
+
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    throw new Error("This image could not be opened. Choose a different photo.");
+  }
+
+  try {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Image processing is unavailable in this browser.");
+
+    let scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+    const qualities = [0.82, 0.7, 0.58, 0.46];
+
+    for (let resizeAttempt = 0; resizeAttempt < 5; resizeAttempt += 1) {
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+      for (const quality of qualities) {
+        const blob = await new Promise<Blob>((resolve, reject) => {
+          canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Unable to compress this image.")), "image/jpeg", quality);
+        });
+        if (blob.size <= MAX_IMAGE_BYTES) return blob;
+      }
+
+      scale *= 0.75;
+    }
+
+    throw new Error("This photo is too large to attach. Choose a smaller image.");
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function uploadImage(blob: Blob) {
+  const signed = await apiRequest<{ upload_id: string; url: string; fields: Record<string, string> }>("/uploads/presign", {
+    method: "POST",
+    body: JSON.stringify({ content_type: blob.type, size: blob.size }),
   });
+  const form = new FormData();
+  Object.entries(signed.fields).forEach(([key, value]) => form.append(key, value));
+  form.append("file", blob, "item-photo.jpg");
+  try {
+    const response = await fetch(signed.url, { method: "POST", body: form });
+    if (!response.ok) throw new Error("Photo upload failed. Please try again.");
+  } catch (error) {
+    await apiRequest(`/uploads/${signed.upload_id}`, { method: "DELETE" }).catch(() => undefined);
+    throw error;
+  }
+  return signed.upload_id;
 }
 
 function mapApiItem(item: ApiItem): Item {
@@ -148,6 +234,7 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [itemsLoading, setItemsLoading] = useState(false);
+  const [itemsRefreshKey, setItemsRefreshKey] = useState(0);
   const [browseItems, setBrowseItems] = useState<Item[]>([]);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [itemsError, setItemsError] = useState("");
@@ -157,37 +244,35 @@ export default function Home() {
   const [authResetMessage, setAuthResetMessage] = useState("");
   const [contactPreferences, setContactPreferences] = useState<ContactPreferences>(defaultContactPreferences);
   const [protocolOpen, setProtocolOpen] = useState(false);
-  const [resolutions, setResolutions] = useState<any[]>([]);
+  const [resolutions, setResolutions] = useState<ResolutionEvent[]>([]);
   const [resolutionsLoading, setResolutionsLoading] = useState(false);
   const [resolutionsOpen, setResolutionsOpen] = useState(false);
   const [resolutionsError, setResolutionsError] = useState("");
   const [userSearchOpen, setUserSearchOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [custodyHistoryItem, setCustodyHistoryItem] = useState<Item | null>(null);
+  const [custodyEvents, setCustodyEvents] = useState<CustodyEvent[]>([]);
+  const [custodyEventsLoading, setCustodyEventsLoading] = useState(false);
+  const [custodyEventsError, setCustodyEventsError] = useState("");
   const [selectedReassignItemId, setSelectedReassignItemId] = useState<string | null>(null);
+  const [reassigningItemId, setReassigningItemId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [reportError, setReportError] = useState("");
+  const [reportMessage, setReportMessage] = useState("");
 
   function navigateToView(nextView: View) {
     if (user) router.push(nextView === "home" ? "/app" : `/app/${nextView}`);
   }
 
   useEffect(() => {
-    const token = getStoredToken();
-    if (!token) {
-      localStorage.removeItem("campuslink_user");
-      setUser(null);
-      setAuthChecking(false);
-      return;
-    }
-
-    void apiRequest<User>("/auth/session", {}, false)
+    localStorage.removeItem("campuslink_token");
+    localStorage.removeItem("campuslink_user");
+    void apiRequest<User>("/auth/session")
       .then((sessionUser) => {
         setUser(sessionUser);
-        localStorage.setItem("campuslink_user", JSON.stringify(sessionUser));
       })
       .catch(() => {
-        localStorage.removeItem("campuslink_token");
-        localStorage.removeItem("campuslink_user");
         setUser(null);
       })
       .finally(() => setAuthChecking(false));
@@ -212,6 +297,16 @@ export default function Home() {
     };
 
     void loadItems();
+  }, [itemsRefreshKey, user]);
+
+  useEffect(() => {
+    if (user?.account_type !== "staff") return;
+
+    const refreshOnFocus = () => {
+      if (document.visibilityState === "visible") setItemsRefreshKey((current) => current + 1);
+    };
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
   }, [user]);
 
   useEffect(() => {
@@ -275,6 +370,8 @@ export default function Home() {
 
   function openReport(type: ReportType) {
     setReportType(type);
+    setReportError("");
+    setReportMessage("");
     setShowReport(true);
   }
 
@@ -283,7 +380,7 @@ export default function Home() {
     setResolutions([]);
     setResolutionsLoading(true);
     try {
-      const data = await apiRequest<any[]>(`/items/${id}/resolutions`);
+      const data = await apiRequest<ResolutionEvent[]>(`/items/${id}/resolutions`);
       setResolutions(data);
       setResolutionsOpen(true);
     } catch (error) {
@@ -294,11 +391,18 @@ export default function Home() {
   }
 
   async function reassignItem(id: string, newUserId: string) {
+    if (reassigningItemId) return;
+    setReassigningItemId(id);
+    setItemsError("");
     try {
       const item = await apiRequest<ApiItem>(`/items/${id}/reassign`, { method: 'PATCH', body: JSON.stringify({ user_id: newUserId }) });
       setItems((current) => current.map((entry) => entry.id === id ? mapApiItem(item) : entry));
+      setReportMessage("Custody assignment updated.");
+      setItemsRefreshKey((current) => current + 1);
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : 'Unable to reassign the item');
+    } finally {
+      setReassigningItemId(null);
     }
   }
 
@@ -318,6 +422,20 @@ export default function Home() {
     }
   }
 
+  async function openCustodyHistory(item: Item) {
+    setCustodyHistoryItem(item);
+    setCustodyEvents([]);
+    setCustodyEventsError("");
+    setCustodyEventsLoading(true);
+    try {
+      setCustodyEvents(await apiRequest<CustodyEvent[]>(`/items/${item.id}/custody-events`));
+    } catch (error) {
+      setCustodyEventsError(error instanceof Error ? error.message : "Unable to load custody history");
+    } finally {
+      setCustodyEventsLoading(false);
+    }
+  }
+
 
   // when a user is selected in the modal, call reassign for the selected item id
   function handleUserSelect(userId: string) {
@@ -328,33 +446,45 @@ export default function Home() {
 
   async function submitReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (actionLoading) return;
     const data = new FormData(event.currentTarget);
 
+    setReportError("");
+    setReportMessage("");
     setActionLoading(true);
+    let imageUploadId: string | undefined;
     try {
       const image = data.get("image");
-      const imageUrl = image instanceof File && image.size ? await readImage(image) : undefined;
-      if (imageUrl && imageUrl.length > 90000) throw new Error("Choose an image smaller than 65 KB");
+      if (image instanceof File && image.size) {
+        const compressedImage = await compressImage(image);
+        imageUploadId = await uploadImage(compressedImage);
+      }
       const description = String(data.get("description"));
       const droppedOffBy = String(data.get("dropped_off_by") || "").trim();
-      const item = await apiRequest<ApiItem>("/items", {
+      const securityIntake = user?.account_type === "staff";
+      const item = await apiRequest<ApiItem>(securityIntake ? "/items/intake" : "/items", {
         method: "POST",
         body: JSON.stringify({
           title: String(data.get("title")),
-          description: droppedOffBy ? `${description}\nDropped off by: ${droppedOffBy}` : description,
-          category: reportType,
+          description,
+          category: securityIntake ? "found" : reportType,
           item_category: String(data.get("item_category") || "other"),
-          location: String(data.get("location")),
+          location: String(data.get(securityIntake ? "found_at" : "location")),
           date_event: String(data.get("date_event")),
-          image_url: imageUrl,
+          ...(securityIntake ? { storage_location: String(data.get("storage_location")), dropped_off_by: droppedOffBy } : {}),
+          ...(imageUploadId ? { image_upload_id: imageUploadId } : {}),
         }),
       });
 
       setItems((current) => [mapApiItem(item), ...current]);
+      setReportMessage(imageUploadId ? "Report submitted and photo uploaded." : "Report submitted successfully.");
       setShowReport(false);
       if (user?.account_type !== "staff") navigateToView("reports");
     } catch (error) {
-      setItemsError(error instanceof Error ? error.message : "Unable to create the report");
+      if (imageUploadId) {
+        await apiRequest(`/uploads/${imageUploadId}`, { method: "DELETE" }).catch(() => undefined);
+      }
+      setReportError(error instanceof Error ? error.message : "Unable to create the report");
     } finally {
       setActionLoading(false);
     }
@@ -453,31 +583,50 @@ export default function Home() {
     }
   }
 
-  async function login(accountType: AccountType, identifier: string, password: string) {
+  async function login(identifier: string, password: string) {
     setAuthError("");
     setAuthMessage("");
     try {
-      const result = await apiRequest<{ token: string; user: User }>("/auth/login", {
+      const result = await apiRequest<{ user: User }>("/auth/login", {
         method: "POST",
-        body: JSON.stringify({ account_type: accountType, identifier, password }),
+        body: JSON.stringify({ identifier, password }),
       });
-      const nextUser = { ...result.user, identifier };
-      localStorage.setItem("campuslink_token", result.token);
-      localStorage.setItem("campuslink_user", JSON.stringify(nextUser));
+      const nextUser = result.user;
       setUser(nextUser);
-      router.replace("/app");
+      // Route from the account type returned by the server, not a form choice.
+      router.replace(nextUser.account_type === "staff" ? "/app/security-dashboard" : "/app/student-dashboard");
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : "Unable to sign in");
+      if (error instanceof ApiError && error.status === 401) {
+        setAuthError("Invalid email or password");
+      } else if (error instanceof ApiError && error.status === 429) {
+        setAuthError("Too many sign-in attempts. Please wait 15 minutes, then try again.");
+      } else {
+        setAuthError("Sign-in is temporarily unavailable. Check your connection and try again.");
+      }
     }
   }
 
-  async function register(accountType: AccountType, name: string, surname: string, email: string, identifier: string, password: string) {
+  async function register(accountType: AccountType, name: string, surname: string, email: string, identifier: string, password: string, confirmPassword: string): Promise<boolean> {
     setAuthError("");
     setAuthMessage("");
-    const expectedEmail = `${identifier.trim().toLowerCase()}@tut4life.ac.za`;
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedIdentifier = identifier.trim();
+    const expectedEmail = `${normalizedIdentifier.toLowerCase()}@tut4life.ac.za`;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      setAuthError("Enter a valid campus email address.");
+      return false;
+    }
+    if (password.length < 8) {
+      setAuthError("Password must be at least 8 characters.");
+      return false;
+    }
+    if (password !== confirmPassword) {
+      setAuthError("Passwords do not match.");
+      return false;
+    }
     if (email.trim().toLowerCase() !== expectedEmail) {
       setAuthError(`Use ${expectedEmail} for this account.`);
-      return;
+      return false;
     }
 
     try {
@@ -485,22 +634,23 @@ export default function Home() {
         method: "POST",
         body: JSON.stringify({
           username: `${name.trim()} ${surname.trim()}`,
-          email,
+          email: normalizedEmail,
           password,
           account_type: accountType,
-          ...(accountType === "student" ? { student_number: identifier } : { staff_number: identifier }),
+          confirm_password: confirmPassword,
+          ...(accountType === "student" ? { student_number: normalizedIdentifier } : { staff_number: normalizedIdentifier }),
         }),
       });
-      setAuthMessage("Account created. Sign in with your campus number and password.");
+      setAuthMessage("Account created. Sign in with your campus email or number and password.");
+      return true;
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Unable to create account");
+      return false;
     }
   }
 
   function logout() {
     void apiRequest("/auth/logout", { method: "POST" }).catch(() => undefined);
-    localStorage.removeItem("campuslink_token");
-    localStorage.removeItem("campuslink_user");
     setUser(null);
     setItems([]);
     setSelectedItem(null);
@@ -525,14 +675,20 @@ export default function Home() {
           onViewProtocol={() => setProtocolOpen(true)}
           onOpenAudit={openAudit}
           onReassign={(itemId) => void openUserSearch(itemId)}
+          reassigningItemId={reassigningItemId}
+          onViewCustodyHistory={(item) => void openCustodyHistory(item)}
+          onRefresh={() => setItemsRefreshKey((current) => current + 1)}
+          itemsLoading={itemsLoading}
           actionLoading={actionLoading}
         />
+        {reportMessage && <div className="security-feedback form-message" role="status">{reportMessage}</div>}
         {itemsError && <div className="security-feedback error-banner" role="alert">{itemsError}</div>}
-        {showReport && <ReportModal type={reportType} securityIntake onClose={() => setShowReport(false)} onSubmit={submitReport} />}
+        {showReport && <ReportModal type={reportType} securityIntake busy={actionLoading} error={reportError} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
         {pendingResolution && <ResolutionModal item={pendingResolution} requireChecks notes={resolutionNotes} setNotes={setResolutionNotes} busy={resolutionBusy} error={itemsError} onClose={() => setPendingResolution(null)} onConfirm={(notes, verification) => void resolveItem(pendingResolution.id, notes ?? resolutionNotes, verification)} />}
         {protocolOpen && <ProtocolModal onClose={() => setProtocolOpen(false)} />}
         {userSearchOpen && <UserSearchModal onClose={() => setUserSearchOpen(false)} onSelect={handleUserSelect} />}
         {auditOpen && <AuditModal onClose={() => setAuditOpen(false)} events={auditEvents} />}
+        {custodyHistoryItem && <CustodyHistoryModal item={custodyHistoryItem} events={custodyEvents} loading={custodyEventsLoading} error={custodyEventsError} onClose={() => setCustodyHistoryItem(null)} />}
       </>
     );
   }
@@ -551,6 +707,7 @@ export default function Home() {
         <button className="user-chip" onClick={() => navigateToView("account")}><span>{getInitials(user.username)}</span><span className="user-name">{user.username}</span></button>
       </header>
 
+      {reportMessage && <div className="form-message" role="status">{reportMessage}</div>}
       {itemsError && <div className="error-banner">{itemsError}</div>}
       {itemsLoading && <div className="loading-banner">Loading items…</div>}
 
@@ -562,7 +719,7 @@ export default function Home() {
 
       <footer className="footer"><span>CampusLink</span><span>Lost and found, together.</span><button onClick={logout}>Sign out</button></footer>
 
-      {showReport && <ReportModal type={reportType} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
+      {showReport && <ReportModal type={reportType} busy={actionLoading} error={reportError} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
       {selectedItem && <ItemModal item={selectedItem} canManage={selectedItem.user_id === user.id} canResolve={selectedItem.user_id === user.id} onClose={() => setSelectedItem(null)} onResolve={requestResolution} onDelete={deleteItem} onUpdate={updateItem} />}
       {pendingResolution && <ResolutionModal item={pendingResolution} notes={resolutionNotes} setNotes={setResolutionNotes} busy={resolutionBusy} error={itemsError} onClose={() => setPendingResolution(null)} onConfirm={() => void resolveItem(pendingResolution.id, resolutionNotes)} />}
       {protocolOpen && <ProtocolModal onClose={() => setProtocolOpen(false)} />}
@@ -595,11 +752,40 @@ function UserSearchModal({ onClose, onSelect }: { onClose: () => void; onSelect:
     };
   }, [query]);
 
-  return <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="user-search-title"><button className="close" onClick={onClose} aria-label="Close">×</button><p className="eyebrow">FIND USER</p><h2 id="user-search-title">Search campus users</h2><label className="search"><input value={query} onChange={(event) => { setQuery(event.target.value); setUsers([]); setError(""); }} placeholder="Search by name, email, or number" /></label>{error ? <p className="form-error" role="alert">{error}</p> : users.length ? <ul className="user-results">{users.map((user) => <li key={user.id}><strong>{user.username}</strong><small>{user.email || user.student_number || user.staff_number}</small><button onClick={() => { onSelect(user.id); onClose(); }}>Select</button></li>)}</ul> : <p className="empty-state">{query.trim().length < 2 ? "Enter at least 2 characters" : "No matching users"}</p>}<div className="modal-footer"><button className="button" onClick={onClose}>Close</button></div></section></div>;
+  return <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="user-search-title"><button className="close" onClick={onClose} aria-label="Close">×</button><p className="eyebrow">CUSTODY HANDOVER</p><h2 id="user-search-title">Search campus staff</h2><label className="search"><input value={query} onChange={(event) => { setQuery(event.target.value); setUsers([]); setError(""); }} placeholder="Search by staff name, email, or number" /></label>{error ? <p className="form-error" role="alert">{error}</p> : users.length ? <ul className="user-results">{users.map((user) => <li key={user.id}><strong>{user.username}</strong><small>{user.email || user.student_number || user.staff_number}</small><button onClick={() => { onSelect(user.id); onClose(); }}>Select</button></li>)}</ul> : <p className="empty-state">{query.trim().length < 2 ? "Enter at least 2 characters" : "No matching staff"}</p>}<div className="modal-footer"><button className="button" onClick={onClose}>Close</button></div></section></div>;
 }
 
 function AuditModal({ onClose, events }: { onClose: () => void; events: AuditEvent[] }) {
   return <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="audit-title"><button className="close" onClick={onClose} aria-label="Close">×</button><p className="eyebrow">AUDIT LOG</p><h2 id="audit-title">Recent staff actions</h2>{events.length ? <ul className="audit-list">{events.map((event) => <li key={event.id}><strong>{event.action}</strong> by <small>{event.user_id}</small> — <code>{event.target_type}:{event.target_id}</code><br /><small>{new Date(event.created_at).toLocaleString()}</small></li>)}</ul> : <p className="empty-state">No audit events</p>}<div className="modal-footer"><button className="button" onClick={onClose}>Close</button></div></section></div>;
+}
+
+function CustodyHistoryModal({ item, events, loading, error, onClose }: { item: Item; events: CustodyEvent[]; loading: boolean; error: string; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop">
+      <section className="modal" role="dialog" aria-modal="true" aria-labelledby="custody-history-title">
+        <button className="close" onClick={onClose} aria-label="Close">×</button>
+        <p className="eyebrow">CUSTODY RECORD</p>
+        <h2 id="custody-history-title">{item.title}</h2>
+        <p className="modal-copy">Current storage: {item.storage_location || "Not recorded"}</p>
+        {loading ? <p role="status">Loading custody history…</p> : error ? <p className="form-error" role="alert">{error}</p> : events.length ? (
+          <ol className="audit-list">
+            {events.map((event) => (
+              <li key={event.id}>
+                <strong>{event.event_type}</strong> by {event.actor_name}
+                <br />
+                <small>{new Date(event.created_at).toLocaleString()}</small>
+                {event.details.storage_location && <p>Storage: {event.details.storage_location}</p>}
+                {event.details.from_user_id && <p>Reassigned from {event.from_user_name || "Staff account"} to {event.to_user_name || "Staff account"}</p>}
+                {event.details.verification && <p>Release checks: student ID, ownership, and item condition recorded.</p>}
+                {event.details.notes && <p>{event.details.notes}</p>}
+              </li>
+            ))}
+          </ol>
+        ) : <p className="empty-state">No custody events recorded.</p>}
+        <div className="modal-footer"><button className="button" onClick={onClose}>Close</button></div>
+      </section>
+    </div>
+  );
 }
 
 function HomeView({ user, items, onBrowse, onReport, onSelect }: { user: User; items: Item[]; onBrowse: () => void; onReport: (type: ReportType) => void; onSelect: (item: Item) => void }) {
@@ -639,7 +825,21 @@ function Notice({ icon, title, text, time, highlight = false }: { icon: string; 
 
 function ItemCard({ item, onClick }: { item: Item; onClick: () => void }) { return <button className="item-card" onClick={onClick}><span className="item-symbol">{categoryIcon[item.item_category || item.category]}</span><span className="item-content"><strong>{item.title}</strong><span>{item.location} <i>·</i> {formatDate(item.date_event)}</span></span><span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span></button>; }
 
-function ReportModal({ type, securityIntake = false, onClose, onSubmit }: { type: ReportType; securityIntake?: boolean; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+function ReportModal({ type, securityIntake = false, busy = false, error = "", onClose, onSubmit }: { type: ReportType; securityIntake?: boolean; busy?: boolean; error?: string; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+  const [photoPreview, setPhotoPreview] = useState("");
+  const [photoName, setPhotoName] = useState("");
+
+  useEffect(() => {
+    if (!photoPreview) return;
+    return () => URL.revokeObjectURL(photoPreview);
+  }, [photoPreview]);
+
+  function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    setPhotoPreview(file ? URL.createObjectURL(file) : "");
+    setPhotoName(file?.name || "");
+  }
+
   return <div className="modal-backdrop"><form className={`modal report-modal ${securityIntake ? "security-intake-modal" : ""}`} onSubmit={onSubmit}>
     <button type="button" className="close" onClick={onClose} aria-label="Close">×</button>
     <p className="eyebrow">{securityIntake ? "CAMPUS SECURITY" : "NEW REPORT"}</p>
@@ -651,13 +851,16 @@ function ReportModal({ type, securityIntake = false, onClose, onSubmit }: { type
     {securityIntake ? <>
       <label>Dropped off by<input name="dropped_off_by" placeholder="Student name or number" /></label>
       <label>Date received<input name="date_event" type="date" required /></label>
-      <label>Storage location<input name="location" required placeholder="Shelf or bin reference" /></label>
+      <label>Found at<input name="found_at" required placeholder="Campus location" /></label>
+      <label>Storage location<input name="storage_location" required placeholder="Shelf or bin reference" /></label>
     </> : <>
       <label>{type === "lost" ? "Last seen location" : "Found at"}<select name="location" required defaultValue=""><option value="" disabled>Select a campus location</option><option>Library</option><option>Campus Security Desk</option><option>Student Centre</option><option>Main Quad</option><option>Residence Hall</option><option>Dining Hall</option><option>Lecture Building</option></select></label>
       <label>Date {type === "lost" ? "lost" : "found"}<input name="date_event" type="date" required /></label>
     </>}
-    <label className="photo-input"><span>＋</span> Add an optional photo<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label>
-    <button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit">{securityIntake ? "Submit item intake" : `Submit ${type} item report`} <span>→</span></button>
+    <label className="photo-input"><span>＋</span> Add an optional photo<input name="image" type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoChange} /></label>
+    {photoPreview && <div className="photo-upload-preview" role="status"><img src={photoPreview} alt="Selected item" /><span>Photo ready: {photoName}</span></div>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit" disabled={busy}>{busy ? (photoName ? "Uploading photo…" : "Submitting…") : securityIntake ? "Submit item intake" : `Submit ${type} item report`} {!busy && <span>→</span>}</button>
   </form></div>;
 }
 
@@ -704,7 +907,7 @@ function ResetPasswordPage({ onReset, error, message }: { onReset: (event: FormE
   return <main className="login-shell"><div className="login-art"><button className="brand" aria-label="CampusLink"><span>UF</span><strong>Campus<span>Link</span></strong></button><div><p className="eyebrow">SECURE ACCESS</p><h1>Reset your password</h1><p>Choose a new password for your CampusLink account.</p></div><small>Lost and found, together.</small></div><section className="login-panel"><div className="login-heading"><p className="eyebrow">NEW PASSWORD</p><h2>Set a strong password</h2></div><form className="login-form" onSubmit={onReset}><label>New password<input name="password" type="password" required minLength={8} placeholder="At least 8 characters" autoComplete="new-password" /></label>{error && <p className="form-error" role="alert">{error}</p>}{message && <p className="form-message" role="status">{message}</p>}<button className="button dark" type="submit">Update password</button></form></section></main>;
 }
 
-function LoginPage({ onLogin, onRegister, error, message, onForgot }: { onLogin: (accountType: AccountType, identifier: string, password: string) => Promise<void>; onRegister: (accountType: AccountType, name: string, surname: string, email: string, identifier: string, password: string) => Promise<void>; error: string; message: string; onForgot: () => void }) {
+function LoginPage({ onLogin, onRegister, error, message, onForgot }: { onLogin: (identifier: string, password: string) => Promise<void>; onRegister: (accountType: AccountType, name: string, surname: string, email: string, identifier: string, password: string, confirmPassword: string) => Promise<boolean>; error: string; message: string; onForgot: () => void }) {
   const [accountType, setAccountType] = useState<AccountType>("student");
   const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("");
@@ -712,6 +915,7 @@ function LoginPage({ onLogin, onRegister, error, message, onForgot }: { onLogin:
   const [email, setEmail] = useState("");
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -721,10 +925,14 @@ function LoginPage({ onLogin, onRegister, error, message, onForgot }: { onLogin:
     setBusy(true);
     try {
       if (mode === "login") {
-        await onLogin(accountType, identifier, password);
+        await onLogin(identifier, password);
       } else {
-        await onRegister(accountType, name, surname, email, identifier, password);
-        setMode("login");
+        const registered = await onRegister(accountType, name, surname, email, identifier, password, confirmPassword);
+        if (registered) {
+          setMode("login");
+          setPassword("");
+          setConfirmPassword("");
+        }
       }
     } finally {
       setBusy(false);
@@ -732,32 +940,53 @@ function LoginPage({ onLogin, onRegister, error, message, onForgot }: { onLogin:
   }
 
   const isRegistering = mode === "register";
-  return <main className="login-shell"><div className="login-art"><button className="brand" aria-label="CampusLink"><span>UF</span><strong>Campus<span>Link</span></strong></button><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p>A trusted board for the campus community.</p></div><small>Lost and found, together.</small></div><section className="login-panel"><div className="login-heading"><p className="eyebrow">{isRegistering ? "JOIN CAMPUSLINK" : "WELCOME BACK"}</p><h2>{isRegistering ? "Create your account" : "Sign in to CampusLink"}</h2><p>{isRegistering ? "Use your campus details to join the board." : "Use your campus credentials to continue."}</p></div><div className="account-switch"><button type="button" className={accountType === "student" ? "selected" : ""} onClick={() => setAccountType("student")}>Student</button><button type="button" className={accountType === "staff" ? "selected" : ""} onClick={() => setAccountType("staff")}>Campus Security</button></div><form onSubmit={submit} className="login-form">{isRegistering && <div className="name-fields"><label>Name<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="First name" autoComplete="given-name" /></label><label>Surname<input required value={surname} onChange={(event) => setSurname(event.target.value)} placeholder="Surname" autoComplete="family-name" /></label></div>}{isRegistering && <label>{accountType === "student" ? "Student email" : "Staff email"}<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@tut4life.ac.za" autoComplete="email" /></label>}<label>{accountType === "student" ? "Student number" : "Staff number"}<input required value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder={accountType === "student" ? "e.g. 202312345" : "e.g. SEC-001"} autoComplete={accountType === "student" ? "username" : "off"} /></label><label>Password<input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" autoComplete="current-password" /></label>{!isRegistering && <button type="button" className="text-button login-forgot-link" onClick={onForgot}>Forgot password?</button>}{error && <p className="error-message">{error}</p>}{message && <p className="success-message">{message}</p>}<button type="submit" className="button dark" disabled={busy}>{busy ? "Please wait..." : isRegistering ? "Create account" : "Sign in"}</button><button type="button" className="text-button" onClick={() => setMode(isRegistering ? "login" : "register")}>{isRegistering ? "Already have an account? Sign in" : "Need an account? Create one"}</button></form></section></main>;
+  return (
+    <main className="login-shell">
+      <div className="login-art"><button className="brand" aria-label="CampusLink"><span>UF</span><strong>Campus<span>Link</span></strong></button><div><p className="eyebrow">CAMPUS LOST &amp; FOUND</p><h1>Find what matters.<br /><em>Return what doesn&apos;t.</em></h1><p>A trusted board for the campus community.</p></div><small>Lost and found, together.</small></div>
+      <section className="login-panel">
+        <div className="login-heading"><p className="eyebrow">{isRegistering ? "JOIN CAMPUSLINK" : "WELCOME BACK"}</p><h2>{isRegistering ? "Create your account" : "Sign in to CampusLink"}</h2><p>{isRegistering ? "Use your campus details to join the board." : "Use your campus credentials to continue."}</p></div>
+        {isRegistering && <div className="account-switch" role="radiogroup" aria-label="Account type"><button type="button" role="radio" aria-checked={accountType === "student"} className={accountType === "student" ? "selected" : ""} onClick={() => setAccountType("student")}>Student</button><button type="button" role="radio" aria-checked={accountType === "staff"} className={accountType === "staff" ? "selected" : ""} onClick={() => setAccountType("staff")}>Security</button></div>}
+        <form onSubmit={submit} className="login-form">
+          {isRegistering && <div className="name-fields"><label>First name<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="First name" autoComplete="given-name" /></label><label>Surname<input required value={surname} onChange={(event) => setSurname(event.target.value)} placeholder="Surname" autoComplete="family-name" /></label></div>}
+          {isRegistering && <label>{accountType === "student" ? "Student email" : "Staff email"}<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@tut4life.ac.za" autoComplete="email" /></label>}
+          <label>{isRegistering ? accountType === "student" ? "Student number" : "Staff number" : "Email or campus number"}<input required type="text" value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder={isRegistering ? accountType === "student" ? "e.g. 202312345" : "e.g. SEC-001" : "Email or campus number"} autoComplete="username" /></label>
+          <label>Password<input required type="password" minLength={isRegistering ? 8 : undefined} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={isRegistering ? "At least 8 characters" : "Password"} autoComplete={isRegistering ? "new-password" : "current-password"} /></label>
+          {isRegistering && <label>Confirm password<input required type="password" minLength={8} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Re-enter your password" autoComplete="new-password" /></label>}
+          {!isRegistering && <button type="button" className="text-button login-forgot-link" onClick={onForgot}>Forgot password?</button>}
+          {error && <p className="error-message" role="alert">{error}</p>}
+          {message && <p className="success-message" role="status">{message}</p>}
+          <button type="submit" className="button dark" disabled={busy}>{busy ? "Please wait..." : isRegistering ? "Create account" : "Sign in"}</button>
+          <button type="button" className="text-button" onClick={() => setMode(isRegistering ? "login" : "register")}>{isRegistering ? "Already have an account? Sign in" : "Need an account? Create one"}</button>
+        </form>
+      </section>
+    </main>
+  );
 }
 
-function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol, onOpenAudit, onReassign, actionLoading }: { user: User; items: Item[]; onLogout: () => void; onResolve: (item: Item) => void; onLogFound: () => void; onViewProtocol: () => void; onOpenAudit: () => void; onReassign: (id: string) => void; actionLoading?: boolean }) {
+function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol, onOpenAudit, onReassign, onViewCustodyHistory, reassigningItemId, onRefresh, itemsLoading = false, actionLoading }: { user: User; items: Item[]; onLogout: () => void; onResolve: (item: Item) => void; onLogFound: () => void; onViewProtocol: () => void; onOpenAudit: () => void; onReassign: (id: string) => void; onViewCustodyHistory: (item: Item) => void; reassigningItemId: string | null; onRefresh: () => void; itemsLoading?: boolean; actionLoading?: boolean }) {
   const [activeView, setActiveView] = useState<"dashboard" | "items" | "release">("dashboard");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | ItemStatus>("all");
-  const custodyItems = items.filter((item) => item.category === "found" && item.status === "active");
+  const custodyItems = items.filter((item) => item.custody_status === "in_custody" && item.status === "active");
   const releaseItems = custodyItems;
   const filteredItems = items.filter((item) => {
     const matchesStatus = statusFilter === "all" || item.status === statusFilter;
     const query = search.trim().toLowerCase();
-    const matchesSearch = !query || `${item.title} ${item.description} ${item.location}`.toLowerCase().includes(query);
+    const matchesSearch = !query || `${item.title} ${item.description} ${item.location} ${item.storage_location || ""} ${item.custodian_name || ""}`.toLowerCase().includes(query);
     return matchesStatus && matchesSearch;
   });
-  const recentItems = custodyItems.slice(0, 3);
+  const recentItems = items.filter((item) => item.status === "active").slice(0, 3);
   const firstName = user.username.trim().split(/\s+/)[0] || user.username;
 
   function itemRow(item: Item, showReassign = false) {
-    const status = item.status === "resolved" ? "Released" : item.category === "found" ? "Awaiting collection" : "Lost report";
+    const status = item.custody_status === "released" ? "Released" : item.custody_status === "in_custody" ? "In custody" : item.category === "lost" ? "Lost report" : "Found report";
     return <article className="security-item-card" key={item.id}>
       <span className="item-symbol">{categoryIcon[item.item_category || item.category]}</span>
-      <div className="security-item-content"><strong>{item.title}</strong><span>{item.item_category || item.category} · {formatDate(item.date_event)} · {item.location}</span><span className={`status ${item.status}`}>{status}</span></div>
+      <div className="security-item-content"><strong>{item.title}</strong><span>{item.item_category || item.category} · {formatDate(item.date_event)} · {item.location}</span>{item.storage_location && <span>Storage: {item.storage_location}</span>}{item.custody_status === "in_custody" && <span>Assigned to: {item.custodian_user_id === user.id ? "you" : item.custodian_name || "staff"}</span>}<span className={`status ${item.status}`}>{status}</span></div>
       <div className="security-item-actions">
-        {item.status === "active" && item.category === "found" && <button className="button gold" onClick={() => onResolve(item)} disabled={Boolean(actionLoading)}>{actionLoading ? "Working…" : "Release"}</button>}
-        {showReassign && item.status === "active" && <button className="text-button" onClick={() => onReassign(item.id)}>Reassign</button>}
+        {item.custody_status === "in_custody" && item.status === "active" && item.custodian_user_id === user.id && <button className="button gold" onClick={() => onResolve(item)} disabled={Boolean(actionLoading)}>{actionLoading ? "Working…" : "Release"}</button>}
+        {item.custody_status && <button className="text-button" onClick={() => onViewCustodyHistory(item)}>History</button>}
+        {showReassign && item.custody_status === "in_custody" && <button className="text-button" onClick={() => onReassign(item.id)} disabled={Boolean(reassigningItemId)}>{reassigningItemId === item.id ? "Reassigning…" : "Reassign"}</button>}
       </div>
     </article>;
   }
@@ -768,8 +997,8 @@ function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onVie
       {activeView !== "dashboard" && <button type="button" className="dashboard-back-button security-back-button" onClick={() => setActiveView("dashboard")}><span aria-hidden="true">←</span>Back to dashboard</button>}
       {activeView === "dashboard" && <>
         <div className="security-quick-actions"><button className="security-quick-action dark" onClick={onLogFound}><span aria-hidden="true">＋</span>Log new item</button><button className="security-quick-action gold" onClick={() => setActiveView("release")}><span aria-hidden="true">✓</span>Release item</button></div>
-        <div className="security-section-heading"><h2>Recently received</h2><button className="text-button" onClick={() => setActiveView("items")}>View all</button></div>
-        <div className="custody-list">{recentItems.length ? recentItems.map((item) => itemRow(item)) : <div className="empty-state"><h3>No items in custody</h3><p>Found items recorded by Campus Security will appear here.</p></div>}</div>
+        <div className="security-section-heading"><h2>Recent reports</h2><div className="security-section-actions"><button className="text-button" onClick={onRefresh} disabled={itemsLoading}>{itemsLoading ? "Refreshing…" : "Refresh"}</button><button className="text-button" onClick={() => setActiveView("items")}>View all</button></div></div>
+        <div className="custody-list">{recentItems.length ? recentItems.map((item) => itemRow(item)) : <div className="empty-state"><h3>No active reports</h3><p>New lost and found reports will appear here.</p></div>}</div>
         <div className="security-note"><span aria-hidden="true">✓</span><div><h3>Collection verification</h3><p>Verify student ID, proof of ownership, and item condition before releasing an item.</p></div><button className="text-button" onClick={onViewProtocol}>View protocol</button></div>
       </>}
       {activeView === "items" && <>
@@ -780,7 +1009,7 @@ function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onVie
       </>}
       {activeView === "release" && <>
         <div className="security-section-heading"><div><p className="eyebrow">COLLECTION QUEUE</p><h2>Release item</h2></div><button className="text-button" onClick={onViewProtocol}>View protocol</button></div>
-        <p className="security-result-count">Select a found item to verify collection and record its release.</p>
+        <p className="security-result-count">Select an item in Security custody to verify collection and record its release.</p>
         <div className="custody-list">{releaseItems.length ? releaseItems.map((item) => itemRow(item)) : <div className="empty-state"><h3>Nothing is awaiting collection</h3><p>New found-item intake will be listed here.</p></div>}</div>
       </>}
     </section>
@@ -799,4 +1028,17 @@ function getInitials(name: string) {
   return parts.length === 1 ? parts[0].slice(0, 2).toUpperCase() : `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
-function formatDate(date: string) { return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(new Date(`${date}T00:00:00`)); }
+function formatDate(date: string | null | undefined) {
+  const datePart = typeof date === "string" ? date.slice(0, 10) : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return "Date unavailable";
+
+  const parsed = new Date(`${datePart}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return "Date unavailable";
+
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(parsed);
+}

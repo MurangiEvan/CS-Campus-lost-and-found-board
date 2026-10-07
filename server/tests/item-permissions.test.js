@@ -26,10 +26,12 @@ test('staff can resolve another user\'s active item', async () => {
   const original = Item.markAsResolved;
   let callArgs = null;
   let passedNotes = "";
+  let passedVerification = null;
 
-  Item.markAsResolved = async (id, userId, accountType, notes) => {
+  Item.markAsResolved = async (id, userId, accountType, notes, verification) => {
     callArgs = { id, userId, accountType };
     passedNotes = notes;
+    passedVerification = verification;
     return { id, status: 'resolved' };
   };
 
@@ -53,7 +55,12 @@ test('staff can resolve another user\'s active item', async () => {
 
     assert.equal(res.statusCode, 200);
     assert.deepEqual(callArgs, { id: 'item-456', userId: 'staff-1', accountType: 'staff' });
-    assert.equal(passedNotes, 'Verification completed: Student ID verified; proof of ownership confirmed; item condition noted.');
+    assert.equal(passedNotes, '');
+    assert.deepEqual(passedVerification, {
+      student_id_verified: true,
+      proof_of_ownership_confirmed: true,
+      item_condition_noted: true,
+    });
   } finally {
     Item.markAsResolved = original;
   }

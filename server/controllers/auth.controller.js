@@ -6,18 +6,32 @@ const crypto = require('crypto');
 const emailUtils = require('../utils/email');
 
 const isCampusEmail = (email, identifier) => email.trim().toLowerCase() === `${identifier.trim().toLowerCase()}@tut4life.ac.za`;
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+const invalidLoginMessage = 'Invalid email or password';
 
 const register = async (req, res, next) => {
   try {
-    const { username, email, password, account_type = 'student', student_number, staff_number } = req.body;
+    const { username, email, password, confirm_password, account_type, student_number, staff_number } = req.body || {};
     const identifier = account_type === 'student' ? student_number : staff_number;
 
-    if (!username || !email || !password || !['student', 'staff'].includes(account_type)) {
+    if (typeof username !== 'string' || !username.trim() || typeof email !== 'string' || !email.trim() || typeof password !== 'string' || !['student', 'staff'].includes(account_type)) {
       return res.status(400).json({ error: 'Name, email, password, and a valid account type are required' });
     }
 
-    if (!identifier) {
+    if (!isValidEmail(email.trim())) {
+      return res.status(400).json({ error: 'Enter a valid campus email address' });
+    }
+
+    if (typeof identifier !== 'string' || !identifier.trim()) {
       return res.status(400).json({ error: `${account_type === 'student' ? 'Student' : 'Staff'} number is required` });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
+    if (typeof confirm_password !== 'string' || password !== confirm_password) {
+      return res.status(400).json({ error: 'Passwords do not match' });
     }
 
     if (!isCampusEmail(email, identifier)) {
@@ -27,12 +41,22 @@ const register = async (req, res, next) => {
     const normalizedEmail = email.trim().toLowerCase();
 
     const existingUser = await User.findByEmail(normalizedEmail);
-    if (existingUser) {
-      return res.status(400).json({ error: 'Email already in use' });
+    const existingIdentifier = await User.findByCampusIdentifier(identifier.trim());
+    if (existingUser || existingIdentifier) {
+      return res.status(409).json({ error: 'Email or campus number is already registered' });
     }
 
+    // Hash the password before it reaches PostgreSQL.
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.create({ username, email: normalizedEmail, accountType: account_type, studentNumber: student_number || null, staffNumber: staff_number || null, passwordHash });
+    let user;
+    try {
+      user = await User.create({ username: username.trim(), email: normalizedEmail, accountType: account_type, studentNumber: account_type === 'student' ? identifier.trim() : null, staffNumber: account_type === 'staff' ? identifier.trim() : null, passwordHash });
+    } catch (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'Email or campus number is already registered' });
+      }
+      throw error;
+    }
 
     res.status(201).json({
       message: 'User registered successfully',
@@ -45,20 +69,15 @@ const register = async (req, res, next) => {
 
 const login = async (req, res, next) => {
   try {
-    const { account_type = 'student', identifier, password } = req.body;
+    const { identifier, password } = req.body || {};
 
-    if (!identifier || !password || !['student', 'staff'].includes(account_type)) {
-      return res.status(400).json({ error: 'Account type, student/staff number, and password are required' });
+    if (typeof identifier !== 'string' || !identifier.trim() || typeof password !== 'string' || !password) {
+      return res.status(401).json({ error: invalidLoginMessage });
     }
 
-    const user = await User.findByCredential({ accountType: account_type, identifier });
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+    const user = await User.findByLoginIdentifier(identifier.trim());
+    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+      return res.status(401).json({ error: invalidLoginMessage });
     }
 
     const token = jwt.sign(
@@ -76,8 +95,13 @@ const login = async (req, res, next) => {
 
     res.json({
       message: 'Login successful',
-      token,
-      user: { id: user.id, username: user.username, email: user.email, account_type: user.account_type, identifier },
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        account_type: user.account_type,
+        identifier: user.account_type === 'staff' ? user.staff_number : user.student_number,
+      },
     });
   } catch (error) {
     next(error);

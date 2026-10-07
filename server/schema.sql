@@ -2,6 +2,7 @@
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
@@ -44,6 +45,9 @@ CREATE TABLE IF NOT EXISTS items (
     resolution_notes TEXT,
     resolved_at TIMESTAMP WITH TIME ZONE,
     resolved_by UUID REFERENCES users(id),
+    custody_status VARCHAR(20) CHECK (custody_status IN ('in_custody', 'released')),
+    storage_location VARCHAR(255),
+    custodian_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -52,8 +56,13 @@ ALTER TABLE items ADD COLUMN IF NOT EXISTS item_category VARCHAR(20) NOT NULL DE
 ALTER TABLE items ADD COLUMN IF NOT EXISTS resolution_notes TEXT;
 ALTER TABLE items ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP WITH TIME ZONE;
 ALTER TABLE items ADD COLUMN IF NOT EXISTS resolved_by UUID REFERENCES users(id);
+ALTER TABLE items ADD COLUMN IF NOT EXISTS custody_status VARCHAR(20);
+ALTER TABLE items ADD COLUMN IF NOT EXISTS storage_location VARCHAR(255);
+ALTER TABLE items ADD COLUMN IF NOT EXISTS custodian_user_id UUID REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE items DROP CONSTRAINT IF EXISTS items_item_category_check;
 ALTER TABLE items ADD CONSTRAINT items_item_category_check CHECK (item_category IN ('cards', 'keys', 'phones', 'bags', 'other'));
+ALTER TABLE items DROP CONSTRAINT IF EXISTS items_custody_status_check;
+ALTER TABLE items ADD CONSTRAINT items_custody_status_check CHECK (custody_status IS NULL OR custody_status IN ('in_custody', 'released'));
 
 CREATE TABLE IF NOT EXISTS resolution_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -61,6 +70,26 @@ CREATE TABLE IF NOT EXISTS resolution_events (
     resolved_by UUID NOT NULL REFERENCES users(id),
     notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS item_image_uploads (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    object_key TEXT NOT NULL UNIQUE,
+    content_type VARCHAR(50) NOT NULL,
+    byte_size BIGINT NOT NULL CHECK (byte_size > 0),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'attached', 'cancelled')),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS custody_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    actor_id UUID NOT NULL REFERENCES users(id),
+    event_type VARCHAR(20) NOT NULL CHECK (event_type IN ('intake', 'reassigned', 'released')),
+    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Audit events for staff actions
@@ -80,11 +109,13 @@ CREATE INDEX IF NOT EXISTS idx_items_item_category ON items(item_category);
 CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
 CREATE INDEX IF NOT EXISTS idx_items_user ON items(user_id);
 CREATE INDEX IF NOT EXISTS idx_items_date_event ON items(date_event);
-CREATE INDEX IF NOT EXISTS idx_items_location ON items(location);
-CREATE INDEX IF NOT EXISTS idx_items_search ON items USING GIN (to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(description, '')));
-
+DROP INDEX IF EXISTS idx_items_location;
+CREATE INDEX IF NOT EXISTS idx_items_location_trgm ON items USING GIN (location gin_trgm_ops);
 -- Add a stored tsvector column for faster full-text search and index it.
 ALTER TABLE items ADD COLUMN IF NOT EXISTS search_vector tsvector GENERATED ALWAYS AS (
     to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(description, ''))
 ) STORED;
 CREATE INDEX IF NOT EXISTS idx_items_search_vector ON items USING GIN (search_vector);
+CREATE INDEX IF NOT EXISTS idx_items_active_created_at ON items(created_at DESC) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_item_image_uploads_pending ON item_image_uploads(user_id, expires_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_custody_events_item_created ON custody_events(item_id, created_at DESC);

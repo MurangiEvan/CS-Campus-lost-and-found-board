@@ -105,7 +105,9 @@ test('accepts an all-status browse query without filtering by resolved state', a
 
 test('returns resolution events for an item', async () => {
   const original = Item.getResolutions;
+  const originalFindById = Item.findById;
   let receivedId = null;
+  Item.findById = async (itemId) => ({ id: itemId, user_id: 'student-1' });
   Item.getResolutions = async (itemId) => {
     receivedId = itemId;
     return [{ id: 'res-1', item_id: itemId, resolved_by: 'staff-1', notes: 'Test', created_at: '2026-09-22T00:00:00Z' }];
@@ -113,12 +115,13 @@ test('returns resolution events for an item', async () => {
 
   try {
     const res = buildRes();
-    await itemController.getResolutions({ params: { id: 'item-123' }, user: { id: 'staff-1' } }, res, () => { throw new Error('next should not be called'); });
+    await itemController.getResolutions({ params: { id: 'item-123' }, user: { id: 'staff-1', accountType: 'staff' } }, res, () => { throw new Error('next should not be called'); });
     assert.equal(receivedId, 'item-123');
     assert.equal(res.statusCode, 200);
     assert.deepEqual(res.payload, [{ id: 'res-1', item_id: 'item-123', resolved_by: 'staff-1', notes: 'Test', created_at: '2026-09-22T00:00:00Z' }]);
   } finally {
     Item.getResolutions = original;
+    Item.findById = originalFindById;
   }
 });
 

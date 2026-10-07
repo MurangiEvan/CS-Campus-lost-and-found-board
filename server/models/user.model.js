@@ -18,6 +18,22 @@ const User = {
     return rows[0];
   },
 
+  async findByLoginIdentifier(identifier) {
+    const query = `
+      SELECT * FROM users
+      WHERE email = LOWER($1) OR student_number = $1 OR staff_number = $1
+      LIMIT 2;
+    `;
+    const { rows } = await db.query(query, [identifier]);
+    return rows.length === 1 ? rows[0] : null;
+  },
+
+  async findByCampusIdentifier(identifier) {
+    const query = 'SELECT id FROM users WHERE student_number = $1 OR staff_number = $1 LIMIT 1;';
+    const { rows } = await db.query(query, [identifier]);
+    return rows[0];
+  },
+
   async findByEmail(email) {
     const query = 'SELECT * FROM users WHERE email = $1;';
     const { rows } = await db.query(query, [email]);
