@@ -699,10 +699,10 @@ export default function Home() {
         <button className="brand" onClick={() => navigateToView("home")} aria-label="Go to home"><span>UF</span><strong>Campus<span>Link</span></strong></button>
         {view !== "home" && <button type="button" className="dashboard-back-button" onClick={() => navigateToView("home")}><span aria-hidden="true">←</span>Back to dashboard</button>}
         <nav className="topnav" aria-label="Main navigation">
-          <button className={view === "home" ? "active" : ""} onClick={() => navigateToView("home")}>Home</button>
-          <button className={view === "browse" ? "active" : ""} onClick={() => navigateToView("browse")}>Browse items</button>
-          <button className={view === "reports" ? "active" : ""} onClick={() => navigateToView("reports")}>My reports</button>
-          <button className={view === "notifications" ? "active" : ""} onClick={() => navigateToView("notifications")}>Notifications <b>2</b></button>
+          <button type="button" aria-current={view === "home" ? "page" : undefined} className={view === "home" ? "active" : ""} onClick={() => navigateToView("home")}>Home</button>
+          <button type="button" aria-current={view === "browse" ? "page" : undefined} className={view === "browse" ? "active" : ""} onClick={() => navigateToView("browse")}>Browse items</button>
+          <button type="button" aria-current={view === "reports" ? "page" : undefined} className={view === "reports" ? "active" : ""} onClick={() => navigateToView("reports")}>My reports</button>
+          <button type="button" aria-current={view === "notifications" ? "page" : undefined} className={view === "notifications" ? "active" : ""} onClick={() => navigateToView("notifications")}>Notifications <b>2</b></button>
         </nav>
         <button className="user-chip" onClick={() => navigateToView("account")}><span>{getInitials(user.username)}</span><span className="user-name">{user.username}</span></button>
       </header>
@@ -841,7 +841,7 @@ function ReportModal({ type, securityIntake = false, busy = false, error = "", o
   }
 
   return <div className="modal-backdrop"><form className={`modal report-modal ${securityIntake ? "security-intake-modal" : ""}`} onSubmit={onSubmit}>
-    <button type="button" className="close" onClick={onClose} aria-label="Close">×</button>
+    <button type="button" className="close report-modal-close" onClick={onClose} aria-label="Close">×</button>
     <p className="eyebrow">{securityIntake ? "CAMPUS SECURITY" : "NEW REPORT"}</p>
     <h2>{securityIntake ? "Log found item" : `Report ${type} item`}</h2>
     <p className="modal-copy">{securityIntake ? "Record the found item and where it is being held." : "Share a few details so the campus community can help."}</p>

@@ -645,3 +645,13 @@
     padding: 54px 22px 28px;
   }
 }
+
+.report-modal .report-modal-close {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: block;
+  width: max-content;
+  margin: 0 0 0 auto;
+  background: #fff;
+}
