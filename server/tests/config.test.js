@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 const authModulePath = require.resolve('../config/auth');
 const { createTrustedOriginGuard } = require('../middleware/origin.middleware');
-const { getAllowedOrigins, getCookieSameSite } = require('../config/deployment');
+const { getAllowedOrigins, getCookieSameSite, isAllowedOrigin } = require('../config/deployment');
 
 test('production requires an explicit JWT secret', () => {
   const previousNodeEnv = process.env.NODE_ENV;
@@ -32,7 +32,7 @@ test('production requires an explicit JWT secret', () => {
   }
 });
 
-test('state-changing requests require an exact trusted Origin', () => {
+test('state-changing requests require a trusted Origin', () => {
   const guard = createTrustedOriginGuard(['https://campus.example.test']);
   const request = (method, origin) => ({ method, headers: { origin }, get: (header) => header === 'origin' ? origin : undefined });
   const response = () => ({
@@ -57,6 +57,20 @@ test('state-changing requests require an exact trusted Origin', () => {
   nextCalled = false;
   guard(request('DELETE', 'https://campus.example.test'), response(), () => { nextCalled = true; });
   assert.equal(nextCalled, true);
+
+  nextCalled = false;
+  guard(request('POST', 'https://clienntt-g9grgedw5-murangievans-projects.vercel.app'), response(), () => { nextCalled = true; });
+  assert.equal(nextCalled, true);
+});
+
+test('only this CampusLink Vercel preview host pattern is trusted', () => {
+  const allowedOrigins = ['https://campus.example.test'];
+
+  assert.equal(isAllowedOrigin('https://campus.example.test', allowedOrigins), true);
+  assert.equal(isAllowedOrigin('https://clienntt-g9grgedw5-murangievans-projects.vercel.app', allowedOrigins), true);
+  assert.equal(isAllowedOrigin('https://another-project-g9grgedw5-murangievans-projects.vercel.app', allowedOrigins), false);
+  assert.equal(isAllowedOrigin('https://clienntt-g9grgedw5-other-team.vercel.app', allowedOrigins), false);
+  assert.equal(isAllowedOrigin('http://clienntt-g9grgedw5-murangievans-projects.vercel.app', allowedOrigins), false);
 });
 
 test('production deployment defaults to the exact Vercel origin and cross-site cookies', () => {

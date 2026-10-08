@@ -9,7 +9,7 @@ const adminRoutes = require('./routes/admin.routes');
 const uploadRoutes = require('./routes/upload.routes');
 const { errorMiddleware } = require('./middleware/error.middleware');
 const { createTrustedOriginGuard } = require('./middleware/origin.middleware');
-const { getAllowedOrigins } = require('./config/deployment');
+const { getAllowedOrigins, isAllowedOrigin } = require('./config/deployment');
 const db = require('./config/db');
 
 const app = express();
@@ -32,7 +32,7 @@ const corsOptions = {
       return;
     }
 
-    if (allowedOrigins.includes(origin)) {
+    if (isAllowedOrigin(origin, allowedOrigins)) {
       callback(null, true);
       return;
     }
