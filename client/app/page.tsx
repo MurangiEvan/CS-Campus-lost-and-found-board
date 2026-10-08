@@ -7,6 +7,7 @@ type ReportType = "lost" | "found";
 type ItemCategory = "cards" | "keys" | "phones" | "bags" | "other";
 type ItemStatus = "active" | "resolved";
 type View = "home" | "browse" | "reports" | "notifications" | "account" | "forgot-password" | "reset-password";
+type ThemeMode = "system" | "light" | "dark";
 type AccountType = "student" | "staff";
 
 type User = {
@@ -260,6 +261,22 @@ export default function Home() {
   const [actionLoading, setActionLoading] = useState(false);
   const [reportError, setReportError] = useState("");
   const [reportMessage, setReportMessage] = useState("");
+  const [theme, setTheme] = useState<ThemeMode>("system");
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("campuslink_theme");
+      if (saved === "light" || saved === "dark" || saved === "system") setTheme(saved);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    const root = document.documentElement;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => { root.dataset.theme = theme === "dark" || (theme === "system" && media.matches) ? "dark" : "light"; };
+    apply();
+    try { localStorage.setItem("campuslink_theme", theme); } catch {}
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [theme]);
 
   function navigateToView(nextView: View) {
     if (user) router.push(nextView === "home" ? "/app" : `/app/${nextView}`);
@@ -670,6 +687,8 @@ export default function Home() {
           user={user}
           items={items}
           onLogout={logout}
+          theme={theme}
+          onChangeTheme={setTheme}
           onResolve={requestResolution}
           onLogFound={() => openReport("found")}
           onViewProtocol={() => setProtocolOpen(true)}
@@ -702,9 +721,9 @@ export default function Home() {
           <button type="button" aria-current={view === "home" ? "page" : undefined} className={view === "home" ? "active" : ""} onClick={() => navigateToView("home")}>Home</button>
           <button type="button" aria-current={view === "browse" ? "page" : undefined} className={view === "browse" ? "active" : ""} onClick={() => navigateToView("browse")}>Browse items</button>
           <button type="button" aria-current={view === "reports" ? "page" : undefined} className={view === "reports" ? "active" : ""} onClick={() => navigateToView("reports")}>My reports</button>
-          <button type="button" aria-current={view === "notifications" ? "page" : undefined} className={view === "notifications" ? "active" : ""} onClick={() => navigateToView("notifications")}>Notifications <b>2</b></button>
+          <button type="button" aria-current={view === "notifications" ? "page" : undefined} className={view === "notifications" ? "active" : ""} onClick={() => navigateToView("notifications")}>Notifications {notifications.length > 0 && <b>{notifications.length}</b>}</button>
         </nav>
-        <button className="user-chip" onClick={() => navigateToView("account")}><span>{getInitials(user.username)}</span><span className="user-name">{user.username}</span></button>
+        <ThemeToggle theme={theme} onChange={setTheme} /><button className="user-chip" onClick={() => navigateToView("account")}><span>{getInitials(user.username)}</span><span className="user-name">{user.username}</span></button>
       </header>
 
       {reportMessage && <div className="form-message" role="status">{reportMessage}</div>}
@@ -715,9 +734,9 @@ export default function Home() {
       {view === "browse" && <BrowseView items={visibleItems} search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} itemCategory={itemCategory} setItemCategory={setItemCategory} dateFrom={dateFrom} setDateFrom={setDateFrom} dateTo={dateTo} setDateTo={setDateTo} location={location} setLocation={setLocation} showArchived={showArchived} setShowArchived={setShowArchived} loading={browseLoading} onSelect={setSelectedItem} onReport={openReport} />}
       {view === "reports" && <ReportsView items={items.filter((item) => item.user_id === user.id)} onSelect={setSelectedItem} onReport={openReport} />}
       {view === "notifications" && <NotificationsView notifications={notifications} />}
-      {view === "account" && <AccountView user={user} items={items.filter((item) => item.user_id === user.id)} contactPreferences={contactPreferences} setContactPreferences={setContactPreferences} onBrowseReports={() => navigateToView("reports")} />}
+      {view === "account" && <AccountView user={user} items={items.filter((item) => item.user_id === user.id)} contactPreferences={contactPreferences} setContactPreferences={setContactPreferences} onBrowseReports={() => navigateToView("reports")} onLogout={logout} />}
 
-      <footer className="footer"><span>CampusLink</span><span>Lost and found, together.</span><button onClick={logout}>Sign out</button></footer>
+      <footer className="footer"><span>CampusLink</span><span>Lost and found, together.</span></footer>
 
       {showReport && <ReportModal type={reportType} busy={actionLoading} error={reportError} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
       {selectedItem && <ItemModal item={selectedItem} canManage={selectedItem.user_id === user.id} canResolve={selectedItem.user_id === user.id} onClose={() => setSelectedItem(null)} onResolve={requestResolution} onDelete={deleteItem} onUpdate={updateItem} />}
@@ -788,12 +807,19 @@ function CustodyHistoryModal({ item, events, loading, error, onClose }: { item: 
   );
 }
 
+function ThemeToggle({ theme, onChange }: { theme: ThemeMode; onChange: (value: ThemeMode) => void }) {
+  const next: ThemeMode = theme === "system" ? "light" : theme === "light" ? "dark" : "system";
+  const glyph = theme === "system" ? "◐" : theme === "light" ? "☀" : "☾";
+  const label = theme === "system" ? "System" : theme === "light" ? "Light" : "Dark";
+  return <button type="button" className="theme-toggle" onClick={() => onChange(next)} title={`Theme: ${label}`} aria-label={`Theme: ${label}. Activate to switch to ${next} mode.`}><span aria-hidden="true">{glyph}</span></button>;
+}
+
 function HomeView({ user, items, onBrowse, onReport, onSelect }: { user: User; items: Item[]; onBrowse: () => void; onReport: (type: ReportType) => void; onSelect: (item: Item) => void }) {
   const activeCount = items.filter((item) => item.user_id === user.id && item.status === "active").length;
   const firstName = user.username.trim().split(/\s+/)[0] || user.username;
 
   return <section className="student-dashboard">
-    <header className="student-dashboard-header"><div><p>Good morning</p><h1>{firstName} <span aria-hidden="true">👋</span></h1><div><span>{activeCount} active reports</span><span>Campus Security verified</span></div></div><span className="student-dashboard-avatar">{getInitials(user.username)}</span></header>
+    <header className="student-dashboard-header"><div><p>Welcome back</p><h1>{firstName} <span aria-hidden="true">👋</span></h1><div><span>{activeCount} active reports</span><span>Campus Security verified</span></div></div><span className="student-dashboard-avatar">{getInitials(user.username)}</span></header>
     <div className="student-dashboard-content">
       <div className="student-dashboard-actions"><button className="dark" onClick={() => onReport("lost")}><span aria-hidden="true">⌕</span>Report Lost</button><button className="gold" onClick={() => onReport("found")}><span aria-hidden="true">＋</span>Report Found</button></div>
       <div className="security-section-heading"><h2>Recent on campus</h2><button className="text-button" onClick={onBrowse}>View all</button></div>
@@ -815,10 +841,10 @@ function NotificationsView({ notifications }: { notifications: NotificationItem[
   return <section className="page-section narrow"><div className="page-intro"><p className="eyebrow">STAY IN THE LOOP</p><h1>Notifications</h1><p>Updates about reports that may connect with yours.</p></div><div className="notifications">{notifications.length ? notifications.map((item) => <Notice key={item.id} icon={item.highlight ? "✦" : "✓"} title={item.title} text={item.text} time={item.time} highlight={item.highlight} />) : <div className="empty-state"><h3>No new notifications</h3><p>Your match and resolution updates will appear here.</p></div>}</div></section>;
 }
 
-function AccountView({ user, items, contactPreferences, setContactPreferences, onBrowseReports }: { user: User; items: Item[]; contactPreferences: ContactPreferences; setContactPreferences: (value: ContactPreferences) => void; onBrowseReports: () => void }) {
+function AccountView({ user, items, contactPreferences, setContactPreferences, onBrowseReports, onLogout }: { user: User; items: Item[]; contactPreferences: ContactPreferences; setContactPreferences: (value: ContactPreferences) => void; onBrowseReports: () => void; onLogout: () => void }) {
   const activeItems = items.filter((item) => item.status === "active");
   const resolvedItems = items.filter((item) => item.status === "resolved");
-  return <section className="page-section account-page"><div className="page-intro"><p className="eyebrow">YOUR ACCOUNT</p><h1>{user.username}</h1><p>Manage your campus profile and keep track of your lost and found activity.</p></div><div className="account-layout"><section className="account-profile"><span className="account-avatar">{getInitials(user.username)}</span><div><h2>Student profile</h2><p>{user.email || "Campus email not provided"}</p><span className="account-number">Student number: {user.identifier}</span></div></section><section className="account-panel"><div className="account-panel-heading"><div><p className="eyebrow">ACTIVE LISTINGS</p><h2>Your active reports</h2></div><strong>{activeItems.length}</strong></div>{activeItems.length ? <div className="account-list">{activeItems.map((item) => <ItemCard key={item.id} item={item} onClick={() => onBrowseReports()} />)}</div> : <p className="account-empty">You have no active listings.</p>}</section><section className="account-panel"><div className="account-panel-heading"><div><p className="eyebrow">CONTACT PREFERENCES</p><h2>How we reach you</h2></div><span className="preference-state">Enabled</span></div><label className="preference-row"><span>Email updates</span><input type="checkbox" checked={contactPreferences.emailUpdates} onChange={(event) => setContactPreferences({ ...contactPreferences, emailUpdates: event.target.checked })} /></label><label className="preference-row"><span>Match alerts</span><input type="checkbox" checked={contactPreferences.matchAlerts} onChange={(event) => setContactPreferences({ ...contactPreferences, matchAlerts: event.target.checked })} /></label></section><section className="account-panel"><div className="account-panel-heading"><div><p className="eyebrow">RESOLUTION HISTORY</p><h2>Resolved reports</h2></div><strong>{resolvedItems.length}</strong></div>{resolvedItems.length ? <div className="account-list">{resolvedItems.map((item) => <ItemCard key={item.id} item={item} onClick={onBrowseReports} />)}</div> : <p className="account-empty">Resolved reports will appear here.</p>}</section></div></section>;
+  return <section className="page-section account-page"><div className="page-intro"><p className="eyebrow">YOUR ACCOUNT</p><h1>{user.username}</h1><p>Manage your campus profile and keep track of your lost and found activity.</p></div><div className="account-layout"><section className="account-profile"><span className="account-avatar">{getInitials(user.username)}</span><div><h2>Student profile</h2><p>{user.email || "Campus email not provided"}</p><span className="account-number">Student number: {user.identifier}</span></div></section><section className="account-panel"><div className="account-panel-heading"><div><p className="eyebrow">ACTIVE LISTINGS</p><h2>Your active reports</h2></div><strong>{activeItems.length}</strong></div>{activeItems.length ? <div className="account-list">{activeItems.map((item) => <ItemCard key={item.id} item={item} onClick={() => onBrowseReports()} />)}</div> : <p className="account-empty">You have no active listings.</p>}</section><section className="account-panel"><div className="account-panel-heading"><div><p className="eyebrow">CONTACT PREFERENCES</p><h2>How we reach you</h2></div><span className="preference-state">Enabled</span></div><label className="preference-row"><span>Email updates</span><input type="checkbox" checked={contactPreferences.emailUpdates} onChange={(event) => setContactPreferences({ ...contactPreferences, emailUpdates: event.target.checked })} /></label><label className="preference-row"><span>Match alerts</span><input type="checkbox" checked={contactPreferences.matchAlerts} onChange={(event) => setContactPreferences({ ...contactPreferences, matchAlerts: event.target.checked })} /></label></section><section className="account-panel"><div className="account-panel-heading"><div><p className="eyebrow">RESOLUTION HISTORY</p><h2>Resolved reports</h2></div><strong>{resolvedItems.length}</strong></div>{resolvedItems.length ? <div className="account-list">{resolvedItems.map((item) => <ItemCard key={item.id} item={item} onClick={onBrowseReports} />)}</div> : <p className="account-empty">Resolved reports will appear here.</p>}</section><section className="account-panel"><div className="account-panel-heading"><div><p className="eyebrow">SESSION</p><h2>Account access</h2></div></div><p className="account-empty">Sign out of CampusLink on this device.</p><button className="button dark account-signout-button" onClick={onLogout}>Sign out</button></section></div></section>;
 }
 
 function Notice({ icon, title, text, time, highlight = false }: { icon: string; title: string; text: string; time: string; highlight?: boolean }) { return <article className={`notice ${highlight ? "highlight" : ""}`}><span className="notice-icon">{icon}</span><div><strong>{title}</strong><p>{text}</p><small>{time}</small></div>{highlight && <b className="unread" />}</article>; }
@@ -963,8 +989,8 @@ function LoginPage({ onLogin, onRegister, error, message, onForgot }: { onLogin:
   );
 }
 
-function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol, onOpenAudit, onReassign, onViewCustodyHistory, reassigningItemId, onRefresh, itemsLoading = false, actionLoading }: { user: User; items: Item[]; onLogout: () => void; onResolve: (item: Item) => void; onLogFound: () => void; onViewProtocol: () => void; onOpenAudit: () => void; onReassign: (id: string) => void; onViewCustodyHistory: (item: Item) => void; reassigningItemId: string | null; onRefresh: () => void; itemsLoading?: boolean; actionLoading?: boolean }) {
-  const [activeView, setActiveView] = useState<"dashboard" | "items" | "release">("dashboard");
+function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onViewProtocol, onOpenAudit, onReassign, onViewCustodyHistory, reassigningItemId, onRefresh, theme, onChangeTheme, itemsLoading = false, actionLoading }: { user: User; items: Item[]; onLogout: () => void; onResolve: (item: Item) => void; onLogFound: () => void; onViewProtocol: () => void; onOpenAudit: () => void; onReassign: (id: string) => void; onViewCustodyHistory: (item: Item) => void; reassigningItemId: string | null; onRefresh: () => void; theme: ThemeMode; onChangeTheme: (value: ThemeMode) => void; itemsLoading?: boolean; actionLoading?: boolean }) {
+  const [activeView, setActiveView] = useState<"dashboard" | "items" | "release" | "profile">("dashboard");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | ItemStatus>("all");
   const custodyItems = items.filter((item) => item.custody_status === "in_custody" && item.status === "active");
@@ -992,7 +1018,7 @@ function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onVie
   }
 
   return <main className="security-shell">
-    <header className="security-header"><div className="security-header-top"><div><p className="eyebrow">CAMPUS SECURITY</p><h1>Good morning, {firstName}</h1><div className="security-header-meta"><span>{items.filter((item) => item.status === "active").length} active reports</span><span>Campus Security verified</span></div></div><div className="security-actions"><span className="security-avatar">{getInitials(user.username)}</span><button onClick={onLogout}>Sign out</button></div></div><div className="security-stats"><div><strong>{custodyItems.length}</strong><span>In custody</span></div><div><strong>{items.filter((item) => item.category === "lost" && item.status === "active").length}</strong><span>Awaiting</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div></header>
+    <header className="security-header"><div className="security-header-top"><div><p className="eyebrow">CAMPUS SECURITY</p><h1>Welcome back, {firstName}</h1><div className="security-header-meta"><span>{items.filter((item) => item.status === "active").length} active reports</span><span>Campus Security verified</span></div></div><div className="security-actions"><ThemeToggle theme={theme} onChange={onChangeTheme} /><button type="button" className="security-avatar" onClick={() => setActiveView("profile")} aria-label="Open profile">{getInitials(user.username)}</button></div></div><div className="security-stats"><div><strong>{custodyItems.length}</strong><span>In custody</span></div><div><strong>{items.filter((item) => item.category === "lost" && item.status === "active").length}</strong><span>Awaiting</span></div><div><strong>{items.filter((item) => item.status === "resolved").length}</strong><span>Resolved</span></div></div></header>
     <section className="security-content">
       {activeView !== "dashboard" && <button type="button" className="dashboard-back-button security-back-button" onClick={() => setActiveView("dashboard")}><span aria-hidden="true">←</span>Back to dashboard</button>}
       {activeView === "dashboard" && <>
@@ -1012,6 +1038,7 @@ function SecurityDashboard({ user, items, onLogout, onResolve, onLogFound, onVie
         <p className="security-result-count">Select an item in Security custody to verify collection and record its release.</p>
         <div className="custody-list">{releaseItems.length ? releaseItems.map((item) => itemRow(item)) : <div className="empty-state"><h3>Nothing is awaiting collection</h3><p>New found-item intake will be listed here.</p></div>}</div>
       </>}
+      {activeView === "profile" && <div className="account-layout"><section className="account-profile"><span className="account-avatar">{getInitials(user.username)}</span><div><h2>{user.username}</h2><p>{user.email || "Campus email not provided"}</p><span className="account-number">Staff number: {user.identifier}</span></div></section><section className="account-panel"><div className="account-panel-heading"><div><p className="eyebrow">APPEARANCE</p><h2>Theme</h2></div><ThemeToggle theme={theme} onChange={onChangeTheme} /></div><p className="account-empty">Choose system, light, or dark mode for CampusLink.</p></section><section className="account-panel"><div className="account-panel-heading"><div><p className="eyebrow">SESSION</p><h2>Account access</h2></div></div><p className="account-empty">Sign out of CampusLink on this device.</p><button className="button dark account-signout-button" onClick={onLogout}>Sign out</button></section></div>}
     </section>
     <nav className="security-nav" aria-label="Security navigation">
       <button className={activeView === "dashboard" ? "active" : ""} onClick={() => setActiveView("dashboard")} aria-current={activeView === "dashboard" ? "page" : undefined}><span aria-hidden="true">⌂</span>Dashboard</button>
