@@ -61,12 +61,17 @@ test('state-changing requests require a trusted Origin', () => {
   nextCalled = false;
   guard(request('POST', 'https://clienntt-g9grgedw5-murangievans-projects.vercel.app'), response(), () => { nextCalled = true; });
   assert.equal(nextCalled, true);
+
+  nextCalled = false;
+  guard(request('POST', 'https://clienntt.vercel.app'), response(), () => { nextCalled = true; });
+  assert.equal(nextCalled, true);
 });
 
 test('only this CampusLink Vercel preview host pattern is trusted', () => {
   const allowedOrigins = ['https://campus.example.test'];
 
   assert.equal(isAllowedOrigin('https://campus.example.test', allowedOrigins), true);
+  assert.equal(isAllowedOrigin('https://clienntt.vercel.app', allowedOrigins), true);
   assert.equal(isAllowedOrigin('https://clienntt-g9grgedw5-murangievans-projects.vercel.app', allowedOrigins), true);
   assert.equal(isAllowedOrigin('https://another-project-g9grgedw5-murangievans-projects.vercel.app', allowedOrigins), false);
   assert.equal(isAllowedOrigin('https://clienntt-g9grgedw5-other-team.vercel.app', allowedOrigins), false);

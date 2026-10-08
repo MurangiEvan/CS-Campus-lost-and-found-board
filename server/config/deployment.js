@@ -1,5 +1,6 @@
 const productionOrigins = ['https://cs-campus-lost-and-found-board.vercel.app'];
 const developmentOrigins = ['http://localhost:3000', 'https://cs-campus-lost-and-found-board.vercel.app'];
+const stableVercelOrigin = 'https://clienntt.vercel.app';
 const vercelPreviewOrigin = /^https:\/\/clienntt-[a-z0-9]+-murangievans-projects\.vercel\.app$/;
 
 function getAllowedOrigins(env = process.env) {
@@ -10,7 +11,7 @@ function getAllowedOrigins(env = process.env) {
 }
 
 function isAllowedOrigin(origin, allowedOrigins) {
-  return allowedOrigins.includes(origin) || vercelPreviewOrigin.test(origin);
+  return origin === stableVercelOrigin || allowedOrigins.includes(origin) || vercelPreviewOrigin.test(origin);
 }
 
 function getCookieSameSite(env = process.env) {
