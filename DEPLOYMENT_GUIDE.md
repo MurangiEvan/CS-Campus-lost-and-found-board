@@ -43,7 +43,7 @@ For Vercel, set `API_SERVER_URL` to the deployed Render API origin, for example 
 
 - Create PostgreSQL database.
 - For a new database, run schema initialization from `server/schema.sql`.
-- For an existing database, apply `server/migrations/20261007_add_image_uploads_and_custody.sql` using the migration process for that environment, for example `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f server/migrations/20261007_add_image_uploads_and_custody.sql` from the repository root.
+- For an existing database, apply `server/migrations/20261007_add_image_uploads_and_custody.sql` and `server/migrations/20261009_add_audit_events.sql` using the migration process for that environment. For example, from the repository root, run `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f server/migrations/20261007_add_image_uploads_and_custody.sql` followed by `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f server/migrations/20261009_add_audit_events.sql`.
 - Validate tables: `users`, `items`, `item_image_uploads`, `custody_events`, `resolution_events`, and `audit_events`.
 - Confirm backup/restore flow before production release.
 
