@@ -1,0 +1,576 @@
+openapi: 3.1.0
+info:
+  title: CampusLink API
+  version: 0.0.0
+  description: >-
+    Documentation placeholder version only; the repository does not declare a
+    semantic API version. This source-derived specification covers CampusLink
+    GET and POST endpoints. PATCH and DELETE operations are intentionally outside
+    this scope. Runtime database, email, and object-storage readiness depends on
+    environment configuration.
+servers:
+  - url: http://localhost:3001
+    description: Local development API origin
+  - url: https://{apiHost}
+    description: Placeholder for an approved deployed API host; configure per environment.
+    variables:
+      apiHost:
+        default: api.example.invalid
+        description: Replace with an authorized API host. Do not use production for mutating tests.
+tags:
+  - name: Service
+  - name: Auth
+  - name: Items
+  - name: Administration
+  - name: Uploads
+paths:
+  /:
+    get:
+      tags: [Service]
+      operationId: getApiRoot
+      summary: Get API welcome information
+      responses:
+        '200':
+          description: API welcome information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  endpoints: { type: array, items: { type: string } }
+                required: [message, endpoints]
+  /health:
+    get:
+      tags: [Service]
+      operationId: getHealth
+      summary: Check API liveness
+      responses:
+        '200':
+          description: API process responds
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { const: OK }
+                  timestamp: { type: string, format: date-time }
+                required: [status, timestamp]
+  /ready:
+    get:
+      tags: [Service]
+      operationId: getReadiness
+      summary: Check database connectivity
+      description: Executes SELECT 1; does not verify the complete database schema.
+      responses:
+        '200':
+          description: Database query succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { const: READY }
+                  database: { const: connected }
+                  timestamp: { type: string, format: date-time }
+                required: [status, database, timestamp]
+        '503':
+          description: Database unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadinessError' }
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Register a campus student or staff account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Account created; password hash is not returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegisterResponse' }
+        '400': { $ref: '#/components/responses/ApiError' }
+        '409': { $ref: '#/components/responses/ApiError' }
+        '429': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Authenticate using campus email or identifier
+      description: Sets an HttpOnly campuslink_session cookie. A JWT is not returned in the JSON body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identifier, password]
+              properties:
+                identifier: { type: string }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Authenticated; session cookie set
+          headers:
+            Set-Cookie:
+              description: HttpOnly campuslink_session cookie
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401': { $ref: '#/components/responses/ApiError' }
+        '429': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Clear the session cookie
+      responses:
+        '200':
+          description: Session cookie cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { message: { type: string } }
+                required: [message]
+  /api/v1/auth/forgot-password:
+    post:
+      tags: [Auth]
+      operationId: forgotPassword
+      summary: Request a password reset
+      description: Response is non-enumerating; actual email delivery depends on SMTP configuration.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties: { email: { type: string, format: email } }
+      responses:
+        '200':
+          description: Generic non-enumerating response
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageResponse' }
+        '400': { $ref: '#/components/responses/ApiError' }
+        '429': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  /api/v1/auth/reset-password:
+    post:
+      tags: [Auth]
+      operationId: resetPassword
+      summary: Reset password using a valid reset token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, newPassword]
+              properties:
+                token: { type: string }
+                newPassword: { type: string, format: password }
+      responses:
+        '200':
+          description: Password reset
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageResponse' }
+        '400': { $ref: '#/components/responses/ApiError' }
+        '429': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  /api/v1/auth/session:
+    get:
+      tags: [Auth]
+      operationId: getSession
+      summary: Get current database-backed identity
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      responses:
+        '200':
+          description: Safe current-user identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserIdentity' }
+        '401': { $ref: '#/components/responses/ApiError' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  /api/v1/auth/preferences:
+    get:
+      tags: [Auth]
+      operationId: getPreferences
+      summary: Get account contact preferences
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      responses:
+        '200':
+          description: Contact preference flags
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Preferences' }
+        '401': { $ref: '#/components/responses/ApiError' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  /api/v1/items:
+    get:
+      tags: [Items]
+      operationId: listItems
+      summary: Browse and filter reports
+      security:
+        - {}
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters:
+        - { $ref: '#/components/parameters/category' }
+        - { $ref: '#/components/parameters/itemCategory' }
+        - { $ref: '#/components/parameters/status' }
+        - { $ref: '#/components/parameters/search' }
+        - { $ref: '#/components/parameters/dateFrom' }
+        - { $ref: '#/components/parameters/dateTo' }
+        - { $ref: '#/components/parameters/location' }
+      responses:
+        '200':
+          description: Item array; public fields are privacy-shaped
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Item' } }
+        '400': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+    post:
+      tags: [Items]
+      operationId: createItem
+      summary: Create a lost/found report
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateItemRequest' }
+      responses:
+        '201':
+          description: Item created; owner is taken from authenticated session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Item' }
+        '400': { $ref: '#/components/responses/ApiError' }
+        '401': { $ref: '#/components/responses/ApiError' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  '/api/v1/items/{id}':
+    get:
+      tags: [Items]
+      operationId: getItem
+      summary: Get one report
+      security:
+        - {}
+        - cookieAuth: []
+        - bearerAuth: []
+      parameters: [{ $ref: '#/components/parameters/itemId' }]
+      responses:
+        '200':
+          description: Privacy-shaped item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Item' }
+        '404': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  '/api/v1/items/{id}/resolutions':
+    get:
+      tags: [Items]
+      operationId: getResolutions
+      summary: Get resolution history
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/itemId' }]
+      responses:
+        '200':
+          description: Resolution history
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/ResolutionEvent' } }
+        '401': { $ref: '#/components/responses/ApiError' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '404': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  '/api/v1/items/{id}/custody-events':
+    get:
+      tags: [Items]
+      operationId: getCustodyEvents
+      summary: Get custody history (staff only)
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/itemId' }]
+      responses:
+        '200':
+          description: Custody event list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/CustodyEvent' } }
+        '401': { $ref: '#/components/responses/ApiError' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  '/api/v1/admin/users':
+    get:
+      tags: [Administration]
+      operationId: searchStaffUsers
+      summary: Search staff users (staff only)
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, minLength: 2 }
+      responses:
+        '200':
+          description: Up to 20 staff users, or an empty array for a missing/short query
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/StaffSearchResult' } }
+        '401': { $ref: '#/components/responses/ApiError' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  /api/v1/admin/audit:
+    get:
+      tags: [Administration]
+      operationId: listAudit
+      summary: List audit events (staff only)
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50, maximum: 200 }
+      responses:
+        '200':
+          description: Audit records newest first
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }
+        '401': { $ref: '#/components/responses/ApiError' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+  /api/v1/uploads/presign:
+    post:
+      tags: [Uploads]
+      operationId: createUploadSession
+      summary: Create a short-lived image upload session
+      description: Requires configured S3-compatible storage. Presign expiry is five minutes.
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content_type, size]
+              properties:
+                content_type: { type: string, enum: [image/jpeg, image/png, image/webp] }
+                size: { type: integer, minimum: 1, maximum: 20971520 }
+      responses:
+        '201':
+          description: Presigned form and upload-session metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PresignResponse' }
+        '400': { $ref: '#/components/responses/ApiError' }
+        '401': { $ref: '#/components/responses/ApiError' }
+        '403': { $ref: '#/components/responses/ApiError' }
+        '503': { $ref: '#/components/responses/ApiError' }
+        '500': { $ref: '#/components/responses/ApiError' }
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: campuslink_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    itemId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    category:
+      name: category
+      in: query
+      required: false
+      schema: { type: string, enum: [lost, found] }
+    itemCategory:
+      name: item_category
+      in: query
+      required: false
+      schema: { type: string, enum: [cards, keys, phones, bags, other] }
+    status:
+      name: status
+      in: query
+      required: false
+      schema: { type: string, enum: [active, resolved, all], default: active }
+    search:
+      name: search
+      in: query
+      required: false
+      schema: { type: string }
+    dateFrom:
+      name: date_from
+      in: query
+      required: false
+      schema: { type: string, format: date }
+    dateTo:
+      name: date_to
+      in: query
+      required: false
+      schema: { type: string, format: date }
+    location:
+      name: location
+      in: query
+      required: false
+      schema: { type: string }
+  responses:
+    ApiError:
+      description: Error response; exact body depends on middleware/controller
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+  schemas:
+    ApiError:
+      type: object
+      properties:
+        error: { type: string }
+        status: { type: integer }
+      required: [error]
+    ReadinessError:
+      type: object
+      properties:
+        status: { const: NOT_READY }
+        database: { const: unavailable }
+        error: { const: Database unavailable }
+      required: [status, database, error]
+    UserIdentity:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        email: { type: string, format: email }
+        account_type: { type: string, enum: [student, staff] }
+        identifier: { type: [string, 'null'] }
+      required: [id, username, email, account_type, identifier]
+    RegisterRequest:
+      type: object
+      required: [username, email, password, confirm_password, account_type]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 50 }
+        email: { type: string, format: email, description: Must match the account identifier and use @tut4life.ac.za. }
+        password: { type: string, format: password, minLength: 8 }
+        confirm_password: { type: string, format: password }
+        account_type: { type: string, enum: [student, staff] }
+        student_number: { type: string }
+        staff_number: { type: string }
+    RegisterResponse:
+      type: object
+      properties:
+        message: { type: string }
+        user:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            username: { type: string }
+            email: { type: string, format: email }
+            account_type: { type: string, enum: [student, staff] }
+          required: [id, username, email, account_type]
+      required: [message, user]
+    LoginResponse:
+      type: object
+      properties:
+        message: { type: string }
+        user: { $ref: '#/components/schemas/UserIdentity' }
+      required: [message, user]
+    MessageResponse:
+      type: object
+      properties: { message: { type: string } }
+      required: [message]
+    Preferences:
+      type: object
+      properties:
+        emailUpdates: { type: boolean }
+        matchAlerts: { type: boolean }
+      required: [emailUpdates, matchAlerts]
+    CreateItemRequest:
+      type: object
+      required: [title, description, category, location, date_event]
+      properties:
+        title: { type: string, maxLength: 100 }
+        description: { type: string }
+        category: { type: string, enum: [lost, found] }
+        item_category: { type: string, enum: [cards, keys, phones, bags, other] }
+        location: { type: string, maxLength: 255 }
+        date_event: { type: string, format: date }
+        image_upload_id: { type: string, format: uuid }
+    Item:
+      type: object
+      description: Some owner/custody fields are present only in authorized staff responses; public responses omit private custody/resolution data.
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string }
+        category: { type: string, enum: [lost, found] }
+        item_category: { type: string, enum: [cards, keys, phones, bags, other] }
+        location: { type: string }
+        date_event: { type: string, format: date }
+        user_id: { type: string, format: uuid }
+        image_url: { type: [string, 'null'], format: uri }
+        status: { type: string, enum: [active, resolved] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ResolutionEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        item_id: { type: string, format: uuid }
+        resolved_by: { type: string, format: uuid }
+        notes: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    CustodyEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        item_id: { type: string, format: uuid }
+        actor_id: { type: string, format: uuid }
+        event_type: { type: string, enum: [intake, reassigned, released] }
+        details: { type: object }
+        created_at: { type: string, format: date-time }
+    StaffSearchResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        email: { type: string, format: email }
+        account_type: { const: staff }
+        student_number: { type: [string, 'null'] }
+        staff_number: { type: [string, 'null'] }
+    AuditEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        action: { type: string }
+        target_type: { type: [string, 'null'] }
+        target_id: { type: [string, 'null'], format: uuid }
+        details: { type: [object, 'null'] }
+        created_at: { type: string, format: date-time }
+    PresignResponse:
+      type: object
+      properties:
+        upload_id: { type: string, format: uuid }
+        expires_at: { type: string, format: date-time }
+        url: { type: string, format: uri }
+        fields: { type: object, additionalProperties: { type: string } }
+      required: [upload_id, expires_at, url, fields]

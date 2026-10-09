@@ -1,0 +1,142 @@
+{
+  "info": {
+    "_postman_id": "campuslink-api-testing-v2",
+    "name": "CampusLink API - GET and POST",
+    "description": "Source-derived GET/POST request templates. Use only an authorized isolated environment. Authentication requests rely on Postman's cookie jar after login; the login response does not return a JWT in JSON. Mutating requests are not run automatically.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "serviceBaseUrl", "value": "http://localhost:3001" },
+    { "key": "baseUrl", "value": "http://localhost:3001/api/v1" },
+    { "key": "resourceId", "value": "00000000-0000-4000-8000-000000000001" },
+    { "key": "studentNumber", "value": "TEST-STUDENT-001" },
+    { "key": "studentEmail", "value": "TEST-STUDENT-001@tut4life.ac.za" },
+    { "key": "staffNumber", "value": "TEST-STAFF-001" },
+    { "key": "staffEmail", "value": "TEST-STAFF-001@tut4life.ac.za" },
+    { "key": "testPassword", "value": "ReplaceWithLocalTestPassword1!" },
+    { "key": "resetToken", "value": "" },
+    { "key": "uploadId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Service",
+      "item": [
+        {
+          "name": "GET /",
+          "request": { "method": "GET", "header": [], "url": "{{serviceBaseUrl}}/", "description": "Public API welcome response." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "pm.test('JSON response', () => pm.response.to.be.json);", "const body = pm.response.json();", "pm.test('Welcome contract', () => { pm.expect(body).to.have.property('message'); pm.expect(body).to.have.property('endpoints'); });"] } }]
+        },
+        {
+          "name": "GET /health",
+          "request": { "method": "GET", "header": [], "url": "{{serviceBaseUrl}}/health", "description": "Public process liveness check." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "const body = pm.response.json();", "pm.test('Health payload', () => { pm.expect(body.status).to.eql('OK'); pm.expect(body.timestamp).to.be.a('string'); });"] } }]
+        },
+        {
+          "name": "GET /ready",
+          "request": { "method": "GET", "header": [], "url": "{{serviceBaseUrl}}/ready", "description": "Public database connectivity check. Expected status may be 200 or 503 depending on test database availability." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Readiness status is recognized', () => pm.expect(pm.response.code).to.be.oneOf([200, 503]));", "const body = pm.response.json();", "pm.test('Readiness body is JSON', () => pm.expect(body).to.be.an('object'));", "if (pm.response.code === 200) pm.test('Database is connected', () => pm.expect(body.database).to.eql('connected'));"] } }]
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST /auth/register",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"username\": \"Test Student\",\n  \"email\": \"{{studentEmail}}\",\n  \"password\": \"{{testPassword}}\",\n  \"confirm_password\": \"{{testPassword}}\",\n  \"account_type\": \"student\",\n  \"student_number\": \"{{studentNumber}}\"\n}" }, "url": "{{baseUrl}}/auth/register", "description": "Creates a synthetic student account. Requires a unique identifier/email. Data-changing; use isolated test DB." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status is 201', () => pm.response.to.have.status(201));", "const body = pm.response.json();", "pm.test('Safe user identity returned', () => { pm.expect(body.user).to.have.property('id'); pm.expect(body.user).to.have.property('account_type', 'student'); pm.expect(body.user).not.to.have.property('password_hash'); });"] } }]
+        },
+        {
+          "name": "POST /auth/login",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"identifier\": \"{{studentNumber}}\",\n  \"password\": \"{{testPassword}}\"\n}" }, "url": "{{baseUrl}}/auth/login", "description": "Logs in a synthetic test user. Postman cookie jar should retain campuslink_session; JWT is not returned in JSON." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "const body = pm.response.json();", "pm.test('Login response has safe identity', () => { pm.expect(body.user).to.have.property('id'); pm.expect(body.user).to.have.property('account_type'); pm.expect(body).not.to.have.property('token'); });", "pm.test('Session cookie is set', () => pm.expect(pm.response.headers.get('Set-Cookie') || '').to.include('campuslink_session='));"] } }]
+        },
+        {
+          "name": "POST /auth/logout",
+          "request": { "method": "POST", "header": [], "url": "{{baseUrl}}/auth/logout", "description": "Clears the session cookie; does not require auth middleware." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "pm.test('Logout message returned', () => pm.expect(pm.response.json().message).to.eql('Logged out'));", "pm.test('Cookie cleared', () => pm.expect(pm.response.headers.get('Set-Cookie') || '').to.include('campuslink_session='));"] } }]
+        },
+        {
+          "name": "POST /auth/forgot-password",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{studentEmail}}\"\n}" }, "url": "{{baseUrl}}/auth/forgot-password", "description": "SMTP-dependent. Use only a test mailbox/capture service." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "pm.test('Non-enumerating message returned', () => pm.expect(pm.response.json().message).to.include('If an account exists')); "] } }]
+        },
+        {
+          "name": "POST /auth/reset-password (invalid token example)",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"newPassword\": \"{{testPassword}}\"\n}" }, "url": "{{baseUrl}}/auth/reset-password", "description": "Set resetToken from a test mail capture for a success test. Empty/invalid token is expected to return 400." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Reset endpoint returns a documented JSON response', () => pm.expect(pm.response.code).to.be.oneOf([200, 400]));", "pm.test('Response is JSON', () => pm.response.to.be.json);", "if (pm.response.code === 200) pm.test('Success message exists', () => pm.expect(pm.response.json().message).to.include('reset'));", "if (pm.response.code === 400) pm.test('Validation error exists', () => pm.expect(pm.response.json()).to.have.property('error'));"] } }]
+        },
+        {
+          "name": "GET /auth/session",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/auth/session", "description": "Requires successful login cookie or a manually provisioned Bearer token." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Session response is 200 or expected auth error', () => pm.expect(pm.response.code).to.be.oneOf([200, 401, 403]));", "if (pm.response.code === 200) { const body = pm.response.json(); pm.test('Safe identity schema', () => { pm.expect(body).to.have.property('id'); pm.expect(body).to.have.property('account_type'); pm.expect(body).not.to.have.property('password_hash'); }); }"] } }]
+        },
+        {
+          "name": "GET /auth/preferences",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/auth/preferences", "description": "Requires authenticated test session." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Preference response is 200 or expected auth error', () => pm.expect(pm.response.code).to.be.oneOf([200, 401, 403]));", "if (pm.response.code === 200) { const body = pm.response.json(); pm.test('Preference booleans', () => { pm.expect(body.emailUpdates).to.be.a('boolean'); pm.expect(body.matchAlerts).to.be.a('boolean'); }); }"] } }]
+        }
+      ]
+    },
+    {
+      "name": "Items",
+      "item": [
+        {
+          "name": "GET /items",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/items?category=found&item_category=keys&status=active&date_from=2026-01-01&location=Library", "description": "Optional authentication; public response omits custody and resolution-private fields." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "pm.test('Body is item array', () => pm.expect(pm.response.json()).to.be.an('array'));", "pm.test('No private custody fields in public results', () => pm.response.json().forEach(item => { pm.expect(item).not.to.have.property('storage_location'); pm.expect(item).not.to.have.property('custodian_user_id'); pm.expect(item).not.to.have.property('resolution_notes'); }));"] } }]
+        },
+        {
+          "name": "GET /items/:id",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/items/{{resourceId}}", "description": "Optional authentication; use existing synthetic item ID." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status is 200 or 404', () => pm.expect(pm.response.code).to.be.oneOf([200, 404]));", "if (pm.response.code === 200) pm.test('Item response has identity', () => pm.expect(pm.response.json()).to.have.property('id'));"] } }]
+        },
+        {
+          "name": "GET /items/:id/resolutions",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/items/{{resourceId}}/resolutions", "description": "Authenticated item owner or staff only." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status reflects resource/access state', () => pm.expect(pm.response.code).to.be.oneOf([200, 401, 403, 404]));", "if (pm.response.code === 200) pm.test('Resolution events are array', () => pm.expect(pm.response.json()).to.be.an('array'));"] } }]
+        },
+        {
+          "name": "GET /items/:id/custody-events",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/items/{{resourceId}}/custody-events", "description": "Staff-only authenticated route." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status reflects staff access', () => pm.expect(pm.response.code).to.be.oneOf([200, 401, 403]));", "if (pm.response.code === 200) pm.test('Custody events are array', () => pm.expect(pm.response.json()).to.be.an('array'));"] } }]
+        },
+        {
+          "name": "POST /items",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"title\": \"Test item {{$timestamp}}\",\n  \"description\": \"Synthetic API test item\",\n  \"category\": \"found\",\n  \"item_category\": \"keys\",\n  \"location\": \"Library\",\n  \"date_event\": \"2026-10-09\"\n}" }, "url": "{{baseUrl}}/items", "description": "Creates data. Use isolated test DB. Owner must be derived from authenticated user." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status is 201 or expected auth/validation error', () => pm.expect(pm.response.code).to.be.oneOf([201, 400, 401, 403]));", "if (pm.response.code === 201) { const body = pm.response.json(); pm.test('Created item has id and owner', () => { pm.expect(body).to.have.property('id'); pm.expect(body).to.have.property('user_id'); }); pm.environment.set('resourceId', body.id); }"] } }]
+        },
+        {
+          "name": "POST /items/intake",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"title\": \"Test custody item {{$timestamp}}\",\n  \"description\": \"Synthetic staff intake test\",\n  \"item_category\": \"other\",\n  \"location\": \"Campus Security Desk\",\n  \"date_event\": \"2026-10-09\",\n  \"storage_location\": \"TEST-BIN-01\",\n  \"dropped_off_by\": \"Synthetic test user\"\n}" }, "url": "{{baseUrl}}/items/intake", "description": "Staff only; creates item and custody/audit events. Isolated test DB only." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status is 201 or expected validation/auth error', () => pm.expect(pm.response.code).to.be.oneOf([201, 400, 401, 403]));", "if (pm.response.code === 201) pm.test('Created intake is found item', () => { const body = pm.response.json(); pm.expect(body).to.have.property('id'); pm.expect(body.category).to.eql('found'); });"] } }]
+        }
+      ]
+    },
+    {
+      "name": "Administration",
+      "item": [
+        {
+          "name": "GET /admin/users",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/admin/users?q=synthetic", "description": "Staff-only search; q must be at least two characters for results." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status reflects staff access', () => pm.expect(pm.response.code).to.be.oneOf([200, 401, 403]));", "if (pm.response.code === 200) pm.test('Search returns array', () => pm.expect(pm.response.json()).to.be.an('array'));"] } }]
+        },
+        {
+          "name": "GET /admin/audit",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/admin/audit?limit=10", "description": "Staff-only audit list; max requested limit is clamped to 200." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status reflects staff access', () => pm.expect(pm.response.code).to.be.oneOf([200, 401, 403]));", "if (pm.response.code === 200) pm.test('Audit response is array', () => pm.expect(pm.response.json()).to.be.an('array'));"] } }]
+        }
+      ]
+    },
+    {
+      "name": "Uploads",
+      "item": [
+        {
+          "name": "POST /uploads/presign",
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"content_type\": \"image/jpeg\",\n  \"size\": 1024\n}" }, "url": "{{baseUrl}}/uploads/presign", "description": "Requires authenticated user and configured S3-compatible test storage. Creates a short-lived upload session." },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Status reflects upload prerequisites', () => pm.expect(pm.response.code).to.be.oneOf([201, 400, 401, 403, 500, 503]));", "if (pm.response.code === 201) { const body = pm.response.json(); pm.test('Presign response fields', () => { pm.expect(body).to.have.property('upload_id'); pm.expect(body).to.have.property('expires_at'); pm.expect(body).to.have.property('url'); pm.expect(body.fields).to.be.an('object'); }); pm.environment.set('uploadId', body.upload_id); }"] } }]
+        }
+      ]
+    }
+  ]
+}
