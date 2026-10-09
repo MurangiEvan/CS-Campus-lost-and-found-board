@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 type ReportType = "lost" | "found";
@@ -854,6 +854,7 @@ function ItemCard({ item, onClick }: { item: Item; onClick: () => void }) { retu
 function ReportModal({ type, securityIntake = false, busy = false, error = "", onClose, onSubmit }: { type: ReportType; securityIntake?: boolean; busy?: boolean; error?: string; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   const [photoPreview, setPhotoPreview] = useState("");
   const [photoName, setPhotoName] = useState("");
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!photoPreview) return;
@@ -864,6 +865,12 @@ function ReportModal({ type, securityIntake = false, busy = false, error = "", o
     const file = event.currentTarget.files?.[0];
     setPhotoPreview(file ? URL.createObjectURL(file) : "");
     setPhotoName(file?.name || "");
+  }
+
+  function removePhoto() {
+    if (photoInputRef.current) photoInputRef.current.value = "";
+    setPhotoPreview("");
+    setPhotoName("");
   }
 
   return <div className="modal-backdrop"><form className={`modal report-modal ${securityIntake ? "security-intake-modal" : ""}`} onSubmit={onSubmit}>
@@ -883,8 +890,8 @@ function ReportModal({ type, securityIntake = false, busy = false, error = "", o
       <label>{type === "lost" ? "Last seen location" : "Found at"}<select name="location" required defaultValue=""><option value="" disabled>Select a campus location</option><option>Library</option><option>Campus Security Desk</option><option>Student Centre</option><option>Main Quad</option><option>Residence Hall</option><option>Dining Hall</option><option>Lecture Building</option></select></label>
       <label>Date {type === "lost" ? "lost" : "found"}<input name="date_event" type="date" required /></label>
     </>}
-    <label className="photo-input"><span>＋</span> Add an optional photo<input name="image" type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoChange} /></label>
-    {photoPreview && <div className="photo-upload-preview" role="status"><img src={photoPreview} alt="Selected item" /><span>Photo ready: {photoName}</span></div>}
+    <label className="photo-input"><span>＋</span> Add an optional photo<input ref={photoInputRef} name="image" type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoChange} /></label>
+    {photoPreview && <div className="photo-upload-preview" role="status"><img src={photoPreview} alt="Selected item" /><span>Photo ready: {photoName}</span><button type="button" className="photo-remove" onClick={removePhoto} aria-label="Remove selected photo">Remove</button></div>}
     {error && <p className="form-error" role="alert">{error}</p>}
     <button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit" disabled={busy}>{busy ? (photoName ? "Uploading photo…" : "Submitting…") : securityIntake ? "Submit item intake" : `Submit ${type} item report`} {!busy && <span>→</span>}</button>
   </form></div>;

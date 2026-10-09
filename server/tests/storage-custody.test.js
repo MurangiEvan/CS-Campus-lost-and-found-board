@@ -6,6 +6,7 @@ const ImageUpload = require('../models/image-upload.model');
 const Item = require('../models/item.model');
 const db = require('../config/db');
 const itemController = require('../controllers/item.controller');
+const uploadController = require('../controllers/upload.controller');
 
 const storageEnv = ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_PUBLIC_BASE_URL', 'IMAGE_UPLOAD_MAX_BYTES', 'NODE_ENV'];
 const originalEnv = Object.fromEntries(storageEnv.map((key) => [key, process.env[key]]));
@@ -31,6 +32,27 @@ test('upload validation rejects unsupported, empty, and oversized images', () =>
   assert.throws(() => storage.validateUpload({ contentType: 'image/jpeg', size: 0 }), /no larger than/);
   assert.throws(() => storage.validateUpload({ contentType: 'image/jpeg', size: 4097 }), /no larger than/);
   assert.equal(storage.validateUpload({ contentType: 'image/webp', size: 1024 }).extension, 'webp');
+});
+
+test('presign reports a safe actionable error when object storage is not configured', async () => {
+  const originalCreateUpload = storage.createUpload;
+  let statusCode;
+  let payload;
+  storage.createUpload = async () => { throw new Error('Object storage is not configured'); };
+  const response = {
+    status(code) { statusCode = code; return this; },
+    json(value) { payload = value; return this; },
+  };
+
+  try {
+    await uploadController.createUpload({ body: {}, user: { id: 'user-id' } }, response, (error) => { throw error; });
+    assert.equal(statusCode, 503);
+    assert.deepEqual(payload, {
+      error: 'Photo uploads are unavailable. Remove the photo or contact campus support.',
+    });
+  } finally {
+    storage.createUpload = originalCreateUpload;
+  }
 });
 
 test('image cleanup accepts only URLs under the configured public bucket prefix', () => {

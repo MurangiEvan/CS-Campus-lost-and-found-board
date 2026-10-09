@@ -362,6 +362,16 @@
   white-space: nowrap;
 }
 
+.photo-upload-preview .photo-remove {
+  flex: none;
+  margin-left: auto;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+  color: #a33434;
+  font-size: 12px;
+}
+
 .security-intake-modal {
   gap: 1px;
 }

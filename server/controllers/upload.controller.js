@@ -17,6 +17,9 @@ const createUpload = async (req, res, next) => {
     if (error.message?.startsWith('Choose a JPEG') || error.message?.startsWith('Image must be no larger')) {
       return res.status(400).json({ error: error.message });
     }
+    if (error.message === 'Object storage is not configured') {
+      return res.status(503).json({ error: 'Photo uploads are unavailable. Remove the photo or contact campus support.' });
+    }
     next(error);
   }
 };
