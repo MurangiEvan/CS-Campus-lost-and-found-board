@@ -524,6 +524,8 @@ export default function Home() {
       setSelectedItem((current) => current && current.id === id ? mapped : current);
       setPendingResolution(null);
       setResolutionNotes("");
+      setReportMessage("Item released and recorded in the custody history.");
+      setItemsRefreshKey((current) => current + 1);
     } catch (error) {
       setItemsError(error instanceof Error ? error.message : "Unable to resolve the item");
     } finally {
