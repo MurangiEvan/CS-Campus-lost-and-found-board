@@ -12,14 +12,7 @@ const pool = new Pool({
 });
 
 async function runSqlScript(sql) {
-  const statements = sql
-    .split(/;\s*(?:\r?\n|$)/)
-    .map((statement) => statement.trim())
-    .filter(Boolean);
-
-  for (const statement of statements) {
-    await pool.query(statement);
-  }
+  await pool.query(sql);
 }
 
 async function initializeDatabase() {
@@ -50,4 +43,5 @@ module.exports = {
   query: (text, params) => pool.query(text, params),
   pool,
   initializeDatabase,
+  runSqlScript,
 };

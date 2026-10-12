@@ -2,8 +2,34 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const authModulePath = require.resolve('../config/auth');
+const db = require('../config/db');
 const { createTrustedOriginGuard } = require('../middleware/origin.middleware');
 const { getAllowedOrigins, getCookieSameSite, isAllowedOrigin } = require('../config/deployment');
+
+test('database script execution preserves dollar-quoted blocks and multiple statements', async () => {
+  const originalQuery = db.pool.query;
+  const sql = `CREATE TABLE IF NOT EXISTS example (id UUID);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'example_check') THEN
+    ALTER TABLE example ADD CONSTRAINT example_check CHECK (id IS NOT NULL);
+  END IF;
+END;
+$$;
+CREATE INDEX IF NOT EXISTS example_id_idx ON example(id);`;
+  const queries = [];
+  db.pool.query = async (query) => {
+    queries.push(query);
+    return { rows: [] };
+  };
+
+  try {
+    await db.runSqlScript(sql);
+    assert.deepEqual(queries, [sql]);
+  } finally {
+    db.pool.query = originalQuery;
+  }
+});
 
 test('production requires an explicit JWT secret', () => {
   const previousNodeEnv = process.env.NODE_ENV;
