@@ -319,7 +319,9 @@ Authorization must be enforced by the server, not only by hiding client controls
 | `POST` | `/api/v1/items` | Yes | Create a report |
 | `PATCH` | `/api/v1/items/:id` | Yes, owner | Update a report |
 | `DELETE` | `/api/v1/items/:id` | Yes, owner | Delete a report |
-| `PATCH` | `/api/v1/items/:id/resolve` | Yes, policy-controlled | Resolve/release a report with optional `notes` |
+| `PATCH` | `/api/v1/items/:id/resolve` | Yes, owner; staff must submit collection verification | Resolve/release a report with optional `notes` |
+
+For staff releases, the request must include `verification.student_id_verified`, `verification.proof_of_ownership_confirmed`, and `verification.item_condition_noted`, all set to `true`. The server rejects incomplete staff verification and records its completion alongside handover notes in resolution history.
 | `GET` | `/api/v1/auth/session` | Yes | Return the current authenticated user's safe profile |
 
 Any change to request or response fields must update this contract and the implementation together.

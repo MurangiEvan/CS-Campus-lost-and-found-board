@@ -12,7 +12,7 @@ async function check(url, expectedStatus = 200) {
 }
 
 (async () => {
-  const base = process.env.NEXT_PUBLIC_API_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+  const base = process.env.NEXT_PUBLIC_API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`;
   try {
     console.log('Checking /health...');
     await check(`${base}/health`);
