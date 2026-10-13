@@ -34,11 +34,35 @@ test('upload validation rejects unsupported, empty, and oversized images', () =>
   assert.equal(storage.validateUpload({ contentType: 'image/webp', size: 1024 }).extension, 'webp');
 });
 
+test('storage configuration diagnostics name missing variables without exposing values', () => {
+  const names = ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_PUBLIC_BASE_URL'];
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  names.forEach((name) => { delete process.env[name]; });
+  try {
+    assert.deepEqual(storage.getConfigurationStatus(), {
+      configured: false,
+      missingSettings: names,
+    });
+  } finally {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  }
+});
+
 test('presign reports a safe actionable error when object storage is not configured', async () => {
   const originalCreateUpload = storage.createUpload;
+  const originalConsoleError = console.error;
   let statusCode;
   let payload;
-  storage.createUpload = async () => { throw new Error('Object storage is not configured'); };
+  storage.createUpload = async () => {
+    const error = new Error('Object storage is not configured');
+    error.code = 'OBJECT_STORAGE_NOT_CONFIGURED';
+    error.missingSettings = ['S3_BUCKET'];
+    throw error;
+  };
+  console.error = () => undefined;
   const response = {
     status(code) { statusCode = code; return this; },
     json(value) { payload = value; return this; },
@@ -48,10 +72,12 @@ test('presign reports a safe actionable error when object storage is not configu
     await uploadController.createUpload({ body: {}, user: { id: 'user-id' } }, response, (error) => { throw error; });
     assert.equal(statusCode, 503);
     assert.deepEqual(payload, {
-      error: 'Photo uploads are unavailable. Remove the photo or contact campus support.',
+      error: 'Photo uploads are not configured on the server. The report can still be submitted without a photo.',
+      code: 'OBJECT_STORAGE_NOT_CONFIGURED',
     });
   } finally {
     storage.createUpload = originalCreateUpload;
+    console.error = originalConsoleError;
   }
 });
 

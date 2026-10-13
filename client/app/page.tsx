@@ -115,7 +115,7 @@ const categoryIcon: Record<string, string> = { lost: "↗", found: "⌕", cards:
 const defaultContactPreferences: ContactPreferences = { emailUpdates: true, matchAlerts: true };
 
 class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message);
   }
 }
@@ -125,23 +125,66 @@ function viewFromPath(pathname: string): View {
   return ["browse", "reports", "notifications", "account", "forgot-password", "reset-password"].includes(segment) ? segment as View : "home";
 }
 
-async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
+function getFriendlyClientMessage(status: number, data: unknown): string {
+  if (status === 401) return "Your session has expired. Please sign in again.";
+  if (status === 403) return "You do not have permission to do that.";
+  if (status === 404) return "We could not find that page or item.";
+  if (status === 413) return "That photo is too large. Please choose a smaller image.";
+  if (status === 422) return "The submitted details look invalid. Please check the form and try again.";
+  if (status === 503 && data && typeof data === "object" && "code" in data && data.code === "OBJECT_STORAGE_NOT_CONFIGURED") {
+    return "Photo uploads are not configured yet. The report can be submitted without the photo.";
+  }
+  if (status >= 500) return "Service temporarily unavailable. Please try again later.";
 
-  const data = await response.json().catch(() => ({ error: "Request failed" }));
-  if (!response.ok) {
-    const message = typeof data?.error === "string" ? data.error : typeof data?.message === "string" ? data.message : "Request failed";
-    throw new ApiError(message, response.status);
+  if (typeof data === "string") return data;
+  if (data && typeof data === "object") {
+    const message = "error" in data ? data.error : "message" in data ? data.message : undefined;
+    if (typeof message === "string" && message.trim()) return message;
   }
 
-  return data as T;
+  return "Request failed. Please try again.";
+}
+
+async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+    });
+
+    let data: unknown = { error: "Request failed" };
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      data = await response.json().catch(() => ({ error: "Request failed" }));
+    } else {
+      const text = await response.text();
+      data = text ? { error: text } : { error: "Request failed" };
+    }
+
+    if (!response.ok) {
+      const message = getFriendlyClientMessage(response.status, data);
+      console.error("[API] Request failed", { path, status: response.status, responseBody: data });
+      const code = data && typeof data === "object" && "code" in data && typeof data.code === "string"
+        ? data.code
+        : undefined;
+      throw new ApiError(message, response.status, code);
+    }
+
+    return data as T;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+
+    const isTimeout = error instanceof DOMException && error.name === "TimeoutError";
+    const isNetworkError = error instanceof TypeError || isTimeout || (error instanceof Error && /(fetch|network|timeout)/i.test(error.message));
+    const message = isNetworkError ? "The server is taking a moment to wake up. Please try again in a few seconds." : "Request failed. Please try again.";
+
+    console.error("[API] Network or timeout error", { path, error });
+    throw new ApiError(message, 0);
+  }
 }
 
 async function compressImage(file: File) {
@@ -196,8 +239,24 @@ async function uploadImage(blob: Blob) {
   Object.entries(signed.fields).forEach(([key, value]) => form.append(key, value));
   form.append("file", blob, "item-photo.jpg");
   try {
-    const response = await fetch(signed.url, { method: "POST", body: form });
-    if (!response.ok) throw new Error("Photo upload failed. Please try again.");
+    let response: Response;
+    try {
+      response = await fetch(signed.url, { method: "POST", body: form });
+    } catch (error) {
+      console.error("[Image upload] Storage request failed before a response was received", { error });
+      throw new Error("Could not reach image storage. Please try again or contact campus support.");
+    }
+
+    const responseBody = await response.text();
+    if (!response.ok) {
+      console.error("[Image upload] Storage provider rejected the upload", {
+        status: response.status,
+        responseBody,
+      });
+      throw new Error(response.status === 403
+        ? "Image storage rejected the upload. Please contact campus support."
+        : `Photo upload failed (HTTP ${response.status}). Please try again.`);
+    }
   } catch (error) {
     await apiRequest(`/uploads/${signed.upload_id}`, { method: "DELETE" }).catch(() => undefined);
     throw error;
@@ -470,11 +529,18 @@ export default function Home() {
     setReportMessage("");
     setActionLoading(true);
     let imageUploadId: string | undefined;
+    let photoOmitted = false;
     try {
       const image = data.get("image");
       if (image instanceof File && image.size) {
-        const compressedImage = await compressImage(image);
-        imageUploadId = await uploadImage(compressedImage);
+        try {
+          const compressedImage = await compressImage(image);
+          imageUploadId = await uploadImage(compressedImage);
+        } catch (error) {
+          const storageDisabled = error instanceof ApiError && error.code === "OBJECT_STORAGE_NOT_CONFIGURED";
+          if (!storageDisabled) throw error;
+          photoOmitted = true;
+        }
       }
       const description = String(data.get("description"));
       const droppedOffBy = String(data.get("dropped_off_by") || "").trim();
@@ -494,7 +560,9 @@ export default function Home() {
       });
 
       setItems((current) => [mapApiItem(item), ...current]);
-      setReportMessage(imageUploadId ? "Report submitted and photo uploaded." : "Report submitted successfully.");
+      setReportMessage(photoOmitted
+        ? "Report submitted, but the photo was not attached because image uploads are not configured. Contact campus support."
+        : imageUploadId ? "Report submitted and photo uploaded." : "Report submitted successfully.");
       setShowReport(false);
       if (user?.account_type !== "staff") navigateToView("reports");
     } catch (error) {
@@ -619,6 +687,8 @@ export default function Home() {
         setAuthError("Invalid email or password");
       } else if (error instanceof ApiError && error.status === 429) {
         setAuthError("Too many sign-in attempts. Please wait 15 minutes, then try again.");
+      } else if (error instanceof ApiError && error.status === 0) {
+        setAuthError("The server is taking a moment to wake up. Please try again in a few seconds.");
       } else {
         setAuthError("Sign-in is temporarily unavailable. Check your connection and try again.");
       }

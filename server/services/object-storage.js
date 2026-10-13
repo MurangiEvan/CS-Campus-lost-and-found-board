@@ -8,14 +8,19 @@ const allowedTypes = new Map([
   ['image/webp', 'webp'],
 ]);
 const defaultMaxBytes = 5 * 1024 * 1024;
+const requiredSettings = ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_PUBLIC_BASE_URL'];
 let cachedClient;
 
 function getConfig() {
-  const { S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_PUBLIC_BASE_URL } = process.env;
-  if (!S3_BUCKET || !S3_ACCESS_KEY_ID || !S3_SECRET_ACCESS_KEY || !S3_PUBLIC_BASE_URL) {
-    throw new Error('Object storage is not configured');
+  const missingSettings = requiredSettings.filter((name) => !process.env[name]);
+  if (missingSettings.length) {
+    const error = new Error('Object storage is not configured');
+    error.code = 'OBJECT_STORAGE_NOT_CONFIGURED';
+    error.missingSettings = missingSettings;
+    throw error;
   }
 
+  const { S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_PUBLIC_BASE_URL } = process.env;
   let publicBase;
   try {
     publicBase = new URL(S3_PUBLIC_BASE_URL);
@@ -43,6 +48,22 @@ function getConfig() {
     publicBase,
     maxBytes,
   };
+}
+
+function getConfigurationStatus() {
+  const missingSettings = requiredSettings.filter((name) => !process.env[name]);
+  if (missingSettings.length) return { configured: false, missingSettings };
+
+  try {
+    getConfig();
+    return { configured: true, missingSettings: [] };
+  } catch (error) {
+    return {
+      configured: false,
+      missingSettings: [],
+      error: error.message,
+    };
+  }
 }
 
 function getClient(config) {
@@ -174,4 +195,4 @@ async function deleteImageUrl(imageUrl, ownerId) {
   return true;
 }
 
-module.exports = { validateUpload, createUpload, hasSupportedImageSignature, publicUrlForKey, keyFromPublicUrl, isManagedObjectKey, finalizeUploadedObject, deleteObject, deleteImageUrl };
+module.exports = { getConfigurationStatus, validateUpload, createUpload, hasSupportedImageSignature, publicUrlForKey, keyFromPublicUrl, isManagedObjectKey, finalizeUploadedObject, deleteObject, deleteImageUrl };

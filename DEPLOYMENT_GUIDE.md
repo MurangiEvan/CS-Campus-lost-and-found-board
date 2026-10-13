@@ -23,6 +23,43 @@ IMAGE_UPLOAD_MAX_BYTES=5242880
 
 In production, `CORS_ORIGINS` may be omitted only when using the default Vercel origin shown above; that exact origin is the built-in fallback. For a custom frontend domain, set `CORS_ORIGINS` to its exact HTTPS origin(s), comma-separated, with no wildcard or domain suffix. State-changing API requests also require an exact matching `Origin` header; do not disable this check for cookie-authenticated requests. Production cookies default to `SameSite=None; Secure` for cross-site Vercel-to-Render requests. Keep storage credentials only in the server environment. `S3_ENDPOINT` is optional for AWS S3 and should be set for compatible services such as MinIO or another S3 API provider. `S3_PUBLIC_BASE_URL` must point at the public-read bucket or CDN URL prefix and must use HTTPS.
 
+### Enable image uploads on Render
+
+The image-upload code is already implemented, but it cannot create a signed upload until the Render API has valid object-storage configuration. In the Render dashboard, open the API service's **Environment** settings and add these server-only variables using values from an S3-compatible storage provider:
+
+| Variable | Value |
+| --- | --- |
+| `S3_BUCKET` | Existing bucket name |
+| `S3_ACCESS_KEY_ID` | Provider access key with the required object permissions |
+| `S3_SECRET_ACCESS_KEY` | Matching secret key |
+| `S3_PUBLIC_BASE_URL` | HTTPS public/CDN URL prefix for the bucket |
+| `S3_REGION` | Provider region; use the provider's documented value |
+| `S3_ENDPOINT` | Provider's S3 API endpoint; leave empty for AWS S3 |
+| `IMAGE_UPLOAD_MAX_BYTES` | `5242880` for the 5 MB limit; optional |
+
+Keep staging objects private. The server key must be allowed to write, read/head,
+copy, and delete objects under `staging/*` and `items/*`. Public or CDN reads
+should be enabled only for permanent `items/*` objects; do not enable bucket
+listing. Configure the bucket's CORS policy to allow `POST` from the production
+client origin (`https://clienntt.vercel.app`) and any preview origins being
+tested. If the provider supports origin patterns, restrict the pattern to this
+Vercel project; otherwise add each exact preview URL. Allow the request headers
+needed for multipart form uploads.
+
+Do not add any `S3_*` variables to Vercel. The browser receives only a short-lived
+presigned form, while the credentials stay on the API. After saving Render
+environment changes, redeploy the API service. To enable local uploads, put the
+same provider settings in the ignored `server/.env` file and restart the API;
+never commit that file or paste secret values into source control.
+
+Check `GET /ready` after redeploy. Its `image_uploads` field reports whether the
+API has valid-looking storage configuration, not whether the provider accepts
+the credentials or bucket policy. Confirm actual access by submitting a small
+JPEG, PNG, or WebP and verifying the returned item has an `image_url`. On a
+failed direct upload, use the browser console's `[Image upload]` status/body and
+the Render logs' `[Uploads]`/`[Storage]` messages to diagnose provider policy,
+credentials, endpoint, or bucket CORS.
+
 Login stores the session only in the `campuslink_session` HttpOnly cookie; it does not return a JWT in JSON or store a token in browser storage. The client sends API requests with credentials enabled, so configure `COOKIE_SAMESITE=none` and `COOKIE_SECURE=true` for cross-site HTTPS deployments.
 
 Keep `staging/*` private and grant the server credential only the required object operations (`PutObject`, `GetObject`/`HeadObject`, `CopyObject`, and `DeleteObject`) under the `staging/*` and `items/*` prefixes. Allow public/CDN reads only under `items/*`; do not enable bucket listing. Configure bucket CORS for the exact client origin and `POST` requests. The API signs a five-minute staging upload policy with a maximum object size, then verifies size, media type, and image signature before copying the content to a fresh permanent `items/*` key that is never signed for client writes.

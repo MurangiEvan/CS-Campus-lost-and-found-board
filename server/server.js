@@ -11,6 +11,7 @@ const { errorMiddleware } = require('./middleware/error.middleware');
 const { createTrustedOriginGuard } = require('./middleware/origin.middleware');
 const { getAllowedOrigins, isAllowedOrigin } = require('./config/deployment');
 const db = require('./config/db');
+const objectStorage = require('./services/object-storage');
 
 const app = express();
 const allowedOrigins = getAllowedOrigins();
@@ -67,7 +68,13 @@ app.get('/health', (req, res) => {
 app.get('/ready', async (req, res) => {
   try {
     await db.query('SELECT 1');
-    res.status(200).json({ status: 'READY', database: 'connected', timestamp: new Date() });
+    const uploadsConfigured = objectStorage.getConfigurationStatus().configured;
+    res.status(200).json({
+      status: 'READY',
+      database: 'connected',
+      image_uploads: uploadsConfigured ? 'configured' : 'not_configured',
+      timestamp: new Date(),
+    });
   } catch (error) {
     res.status(503).json({ status: 'NOT_READY', database: 'unavailable', error: 'Database unavailable' });
   }
