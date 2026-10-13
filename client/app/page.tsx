@@ -2,6 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { useAuthSession, type User } from "./auth-session-provider";
 
 type ReportType = "lost" | "found";
 type ItemCategory = "cards" | "keys" | "phones" | "bags" | "other";
@@ -9,14 +10,6 @@ type ItemStatus = "active" | "resolved";
 type View = "home" | "browse" | "reports" | "notifications" | "account" | "forgot-password" | "reset-password";
 type ThemeMode = "system" | "light" | "dark";
 type AccountType = "student" | "staff";
-
-type User = {
-  id?: string;
-  username: string;
-  email?: string;
-  account_type: AccountType;
-  identifier: string;
-};
 
 type Item = {
   id: string;
@@ -289,9 +282,7 @@ export default function Home() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [location, setLocation] = useState("");
-  const [user, setUser] = useState<User | null>(null);
-  const [authChecking, setAuthChecking] = useState(true);
-  const [authError, setAuthError] = useState("");
+  const { user, setUser, authChecking, authError, setAuthError } = useAuthSession();
   const [authMessage, setAuthMessage] = useState("");
   const [itemsLoading, setItemsLoading] = useState(false);
   const [itemsRefreshKey, setItemsRefreshKey] = useState(0);
@@ -340,20 +331,6 @@ export default function Home() {
   function navigateToView(nextView: View) {
     if (user) router.push(nextView === "home" ? "/app" : `/app/${nextView}`);
   }
-
-  useEffect(() => {
-    localStorage.removeItem("campuslink_token");
-    localStorage.removeItem("campuslink_user");
-    void apiRequest<{ message: string }>("/auth/logout", { method: "POST" })
-      .catch((error) => {
-        console.error("[Auth] Could not clear the previous session on fresh page load", { error });
-        setAuthError("Could not clear the previous session. Sign in to continue; your new sign-in will replace it.");
-      })
-      .finally(() => {
-        setUser(null);
-        setAuthChecking(false);
-      });
-  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -747,7 +724,7 @@ export default function Home() {
     router.replace("/");
   }
 
-  if (authChecking) return <main className="login-shell"><p role="status">Checking your session…</p></main>;
+  if (authChecking) return <main className="login-shell"><p role="status">Preparing sign-in…</p></main>;
   if (!user) {
     if (view === "forgot-password") return <ForgotPasswordPage onForgot={forgotPassword} error={authForgotError} message={authForgotMessage} onBack={() => router.replace("/app")} />;
     if (view === "reset-password") return <ResetPasswordPage onReset={resetPassword} error={authResetError} message={authResetMessage} />;
