@@ -153,7 +153,7 @@ Registration accepts a username, email, password, confirmation, account type, an
 
 ### 6.2 Session and protected navigation
 
-The client requests `/auth/session` to obtain the current database-backed identity. The browser sends cookies with API requests. The client proxy uses the cookie to ask the API to validate the session and redirects to the correct student or security dashboard based on the returned account type. [client/app/page.tsx] [client/proxy.ts] [server/controllers/auth.controller.js]
+On each fresh app page load, the client clears any previous `campuslink_session` cookie and displays sign-in instead of restoring identity from `/auth/session`. After successful sign-in, client-side navigation remains authenticated for that loaded app session. A full-page reload or reopening the website requires credentials again. The browser sends the HttpOnly cookie with API requests, and the client proxy checks it for protected dashboard routes. [client/app/page.tsx] [client/proxy.ts] [server/controllers/auth.controller.js]
 
 ### 6.3 Student report lifecycle
 

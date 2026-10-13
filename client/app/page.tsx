@@ -344,14 +344,15 @@ export default function Home() {
   useEffect(() => {
     localStorage.removeItem("campuslink_token");
     localStorage.removeItem("campuslink_user");
-    void apiRequest<User>("/auth/session")
-      .then((sessionUser) => {
-        setUser(sessionUser);
+    void apiRequest<{ message: string }>("/auth/logout", { method: "POST" })
+      .catch((error) => {
+        console.error("[Auth] Could not clear the previous session on fresh page load", { error });
+        setAuthError("Could not clear the previous session. Sign in to continue; your new sign-in will replace it.");
       })
-      .catch(() => {
+      .finally(() => {
         setUser(null);
-      })
-      .finally(() => setAuthChecking(false));
+        setAuthChecking(false);
+      });
   }, []);
 
   useEffect(() => {

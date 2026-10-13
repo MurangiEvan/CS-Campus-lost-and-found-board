@@ -71,6 +71,17 @@ test('session rejects a deleted account', async () => {
   }
 });
 
+test('logout clears the HttpOnly session cookie with the configured security flags', () => {
+  const res = buildRes();
+  res.clearCookie = (name, options) => { res.clearedCookie = { name, options }; };
+
+  authController.logout({}, res);
+
+  assert.equal(res.clearedCookie.name, 'campuslink_session');
+  assert.equal(res.clearedCookie.options.httpOnly, true);
+  assert.equal(res.payload.message, 'Logged out');
+});
+
 test('login issues an HttpOnly cookie without returning the JWT', async () => {
   const originalFind = User.findByLoginIdentifier;
   const originalCompare = bcrypt.compare;
