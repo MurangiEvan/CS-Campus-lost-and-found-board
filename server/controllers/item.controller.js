@@ -141,6 +141,12 @@ const updateItem = async (req, res, next) => {
     if (updates.image_upload_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(updates.image_upload_id)) {
       return res.status(400).json({ error: 'Invalid image upload reference' });
     }
+    if (updates.remove_image !== undefined && typeof updates.remove_image !== 'boolean') {
+      return res.status(400).json({ error: 'remove_image must be a boolean' });
+    }
+    if (updates.remove_image && updates.image_upload_id) {
+      return res.status(400).json({ error: 'Send either remove_image or image_upload_id, not both' });
+    }
 
     const result = await Item.update(id, updates, req.user.id);
     if (!result) {

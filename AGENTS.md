@@ -93,7 +93,7 @@ custody events, and resolution history rather than encoding those in client stat
 | DELETE | `/api/v1/uploads/:id` | Yes, owner | Cancel and delete an unattached image upload |
 | POST | `/api/v1/items` | Yes | Create a non-custody report; optional image uses `image_upload_id` |
 | POST | `/api/v1/items/intake` | Yes, staff | Create a found item in custody with storage location and intake event |
-| PATCH | `/api/v1/items/:id` | Yes, owner, non-custody | Update a report; optional image uses `image_upload_id` |
+| PATCH | `/api/v1/items/:id` | Yes, owner, non-custody | Update a report; replace the image with `image_upload_id` or clear it with `remove_image: true` (not both) |
 | DELETE | `/api/v1/items/:id` | Yes, owner, non-custody | Delete a report and its owned image |
 | PATCH | `/api/v1/items/:id/resolve` | Yes, owner or assigned staff | Resolve own non-custody report or release assigned custody item; staff sends all verification checks |
 | PATCH | `/api/v1/items/:id/reassign` | Yes, staff | Reassign custody to another staff account and record a custody event |

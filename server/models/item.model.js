@@ -152,7 +152,8 @@ const Item = {
       params.push(value);
     }
 
-    if (!fields.length && !updates.image_upload_id) return null;
+    const removeImage = updates.remove_image === true;
+    if (!fields.length && !updates.image_upload_id && !removeImage) return null;
     const client = await db.pool.connect();
     let attachedImage;
     try {
@@ -167,6 +168,8 @@ const Item = {
         attachedImage = await ImageUpload.attach(client, updates.image_upload_id, userId);
         fields.push(`image_url = $${params.length + 1}`);
         params.push(attachedImage.imageUrl);
+      } else if (removeImage) {
+        fields.push('image_url = NULL');
       }
       if (!fields.length) {
         await client.query('ROLLBACK');

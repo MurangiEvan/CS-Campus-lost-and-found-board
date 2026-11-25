@@ -60,6 +60,17 @@ failed direct upload, use the browser console's `[Image upload]` status/body and
 the Render logs' `[Uploads]`/`[Storage]` messages to diagnose provider policy,
 credentials, endpoint, or bucket CORS.
 
+The browser re-encodes every photo to a JPEG of at most 1600px and 5 MB before
+upload (which also strips EXIF/GPS metadata), so any format the browser can open
+is accepted, including HEIC on Safari. The bucket CORS rule must allow `POST`
+from the frontend origin. Upload progress is read from the browser's XHR upload
+events, so no extra response headers are required. Permanent item photos are
+written with `Cache-Control: public, max-age=31536000, immutable`; their keys are
+random and never reused, so a CDN in front of `S3_PUBLIC_BASE_URL` can cache them
+indefinitely. When storage is configured, the API process deletes expired,
+never-attached staging uploads every 15 minutes. `npm run cleanup:uploads` remains
+available for a one-off or scheduled manual run.
+
 Login stores the session only in the `campuslink_session` HttpOnly cookie; it does not return a JWT in JSON or store a token in browser storage. The client sends API requests with credentials enabled, so configure `COOKIE_SAMESITE=none` and `COOKIE_SECURE=true` for cross-site HTTPS deployments.
 
 Keep `staging/*` private and grant the server credential only the required object operations (`PutObject`, `GetObject`/`HeadObject`, `CopyObject`, and `DeleteObject`) under the `staging/*` and `items/*` prefixes. Allow public/CDN reads only under `items/*`; do not enable bucket listing. Configure bucket CORS for the exact client origin and `POST` requests. The API signs a five-minute staging upload policy with a maximum object size, then verifies size, media type, and image signature before copying the content to a fresh permanent `items/*` key that is never signed for client writes.

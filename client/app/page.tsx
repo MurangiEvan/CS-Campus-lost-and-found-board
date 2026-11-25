@@ -1,8 +1,9 @@
 ﻿"use client";
 
-import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useEffect, useId, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuthSession, type User } from "./auth-session-provider";
+import { formatBytes, preparePhoto, sendToStorage, type PreparedPhoto, type PresignedUpload } from "../lib/photo-upload";
 
 type ReportType = "lost" | "found";
 type ItemCategory = "cards" | "keys" | "phones" | "bags" | "other";
@@ -103,7 +104,6 @@ type ApiItem = {
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || (process.env.NODE_ENV === "production" ? "/api/v1" : "http://localhost:3001/api/v1");
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const categoryIcon: Record<string, string> = { lost: "↗", found: "⌕", cards: "▣", keys: "⌕", phones: "▤", bags: "□", other: "•" };
 const defaultContactPreferences: ContactPreferences = { emailUpdates: true, matchAlerts: true };
 
@@ -180,76 +180,17 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T
   }
 }
 
-async function compressImage(file: File) {
-  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-    throw new Error("Choose a JPEG, PNG, or WebP image.");
-  }
+type SubmitStage = "idle" | "uploading" | "saving";
+type PhotoChange = { kind: "keep" } | { kind: "replace"; photo: PreparedPhoto } | { kind: "remove" };
+type ItemUpdates = { title: string; description: string; location: string; date_event: string };
 
-  let bitmap: ImageBitmap;
-  try {
-    bitmap = await createImageBitmap(file);
-  } catch {
-    throw new Error("This image could not be opened. Choose a different photo.");
-  }
-
-  try {
-    const canvas = document.createElement("canvas");
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Image processing is unavailable in this browser.");
-
-    let scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
-    const qualities = [0.82, 0.7, 0.58, 0.46];
-
-    for (let resizeAttempt = 0; resizeAttempt < 5; resizeAttempt += 1) {
-      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-      context.fillStyle = "#fff";
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-
-      for (const quality of qualities) {
-        const blob = await new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob((result) => result ? resolve(result) : reject(new Error("Unable to compress this image.")), "image/jpeg", quality);
-        });
-        if (blob.size <= MAX_IMAGE_BYTES) return blob;
-      }
-
-      scale *= 0.75;
-    }
-
-    throw new Error("This photo is too large to attach. Choose a smaller image.");
-  } finally {
-    bitmap.close();
-  }
-}
-
-async function uploadImage(blob: Blob) {
-  const signed = await apiRequest<{ upload_id: string; url: string; fields: Record<string, string> }>("/uploads/presign", {
+async function uploadPhoto(photo: PreparedPhoto, onProgress: (percent: number) => void): Promise<string> {
+  const signed = await apiRequest<PresignedUpload>("/uploads/presign", {
     method: "POST",
-    body: JSON.stringify({ content_type: blob.type, size: blob.size }),
+    body: JSON.stringify({ content_type: photo.blob.type, size: photo.blob.size }),
   });
-  const form = new FormData();
-  Object.entries(signed.fields).forEach(([key, value]) => form.append(key, value));
-  form.append("file", blob, "item-photo.jpg");
   try {
-    let response: Response;
-    try {
-      response = await fetch(signed.url, { method: "POST", body: form });
-    } catch (error) {
-      console.error("[Image upload] Storage request failed before a response was received", { error });
-      throw new Error("Could not reach image storage. Please try again or contact campus support.");
-    }
-
-    const responseBody = await response.text();
-    if (!response.ok) {
-      console.error("[Image upload] Storage provider rejected the upload", {
-        status: response.status,
-        responseBody,
-      });
-      throw new Error(response.status === 403
-        ? "Image storage rejected the upload. Please contact campus support."
-        : `Photo upload failed (HTTP ${response.status}). Please try again.`);
-    }
+    await sendToStorage(signed, photo.blob, onProgress);
   } catch (error) {
     await apiRequest(`/uploads/${signed.upload_id}`, { method: "DELETE" }).catch(() => undefined);
     throw error;
@@ -310,6 +251,9 @@ export default function Home() {
   const [reassigningItemId, setReassigningItemId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [reportError, setReportError] = useState("");
+  const [photoError, setPhotoError] = useState("");
+  const [submitStage, setSubmitStage] = useState<SubmitStage>("idle");
+  const [photoProgress, setPhotoProgress] = useState(0);
   const [reportMessage, setReportMessage] = useState("");
   const [theme, setTheme] = useState<ThemeMode>("system");
   useEffect(() => {
@@ -425,6 +369,7 @@ export default function Home() {
   function openReport(type: ReportType) {
     setReportType(type);
     setReportError("");
+    setPhotoError("");
     setReportMessage("");
     setShowReport(true);
   }
@@ -498,28 +443,32 @@ export default function Home() {
     setUserSearchOpen(false);
   }
 
-  async function submitReport(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function submitReport(data: FormData, photo: PreparedPhoto | null) {
     if (actionLoading) return;
-    const data = new FormData(event.currentTarget);
 
     setReportError("");
+    setPhotoError("");
     setReportMessage("");
     setActionLoading(true);
     let imageUploadId: string | undefined;
     let photoOmitted = false;
     try {
-      const image = data.get("image");
-      if (image instanceof File && image.size) {
+      if (photo) {
+        setSubmitStage("uploading");
+        setPhotoProgress(0);
         try {
-          const compressedImage = await compressImage(image);
-          imageUploadId = await uploadImage(compressedImage);
+          imageUploadId = await uploadPhoto(photo, setPhotoProgress);
         } catch (error) {
           const storageDisabled = error instanceof ApiError && error.code === "OBJECT_STORAGE_NOT_CONFIGURED";
-          if (!storageDisabled) throw error;
+          if (!storageDisabled) {
+            // Keep the form intact so the user can retry or deliberately submit without the photo.
+            setPhotoError(error instanceof Error ? error.message : "The photo could not be uploaded.");
+            return;
+          }
           photoOmitted = true;
         }
       }
+      setSubmitStage("saving");
       const description = String(data.get("description"));
       const droppedOffBy = String(data.get("dropped_off_by") || "").trim();
       const securityIntake = user?.account_type === "staff";
@@ -540,7 +489,7 @@ export default function Home() {
       setItems((current) => [mapApiItem(item), ...current]);
       setReportMessage(photoOmitted
         ? "Report submitted, but the photo was not attached because image uploads are not configured. Contact campus support."
-        : imageUploadId ? "Report submitted and photo uploaded." : "Report submitted successfully.");
+        : item.image_url ? "Report submitted with photo." : "Report submitted successfully.");
       setShowReport(false);
       if (user?.account_type !== "staff") navigateToView("reports");
     } catch (error) {
@@ -550,6 +499,7 @@ export default function Home() {
       setReportError(error instanceof Error ? error.message : "Unable to create the report");
     } finally {
       setActionLoading(false);
+      setSubmitStage("idle");
     }
   }
 
@@ -592,17 +542,37 @@ export default function Home() {
     }
   }
 
-  async function updateItem(id: string, updates: { title: string; description: string; location: string; date_event: string }) {
+  async function updateItem(id: string, updates: ItemUpdates, photoChange: PhotoChange): Promise<string | null> {
     setActionLoading(true);
+    let imageUploadId: string | undefined;
     try {
-      const item = await apiRequest<ApiItem>(`/items/${id}`, { method: "PATCH", body: JSON.stringify(updates) });
+      if (photoChange.kind === "replace") {
+        setSubmitStage("uploading");
+        setPhotoProgress(0);
+        imageUploadId = await uploadPhoto(photoChange.photo, setPhotoProgress);
+      }
+      setSubmitStage("saving");
+      const item = await apiRequest<ApiItem>(`/items/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          ...updates,
+          ...(imageUploadId ? { image_upload_id: imageUploadId } : {}),
+          ...(photoChange.kind === "remove" ? { remove_image: true } : {}),
+        }),
+      });
       const mapped = mapApiItem(item);
       setItems((current) => current.map((entry) => entry.id === id ? mapped : entry));
+      setBrowseItems((current) => current.map((entry) => entry.id === id ? mapped : entry));
       setSelectedItem(mapped);
+      return null;
     } catch (error) {
-      setItemsError(error instanceof Error ? error.message : "Unable to update the report");
+      if (imageUploadId) {
+        await apiRequest(`/uploads/${imageUploadId}`, { method: "DELETE" }).catch(() => undefined);
+      }
+      return error instanceof Error ? error.message : "Unable to update the report";
     } finally {
       setActionLoading(false);
+      setSubmitStage("idle");
     }
   }
 
@@ -752,7 +722,7 @@ export default function Home() {
         />
         {reportMessage && <div className="security-feedback form-message" role="status">{reportMessage}</div>}
         {itemsError && <div className="security-feedback error-banner" role="alert">{itemsError}</div>}
-        {showReport && <ReportModal type={reportType} securityIntake busy={actionLoading} error={reportError} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
+        {showReport && <ReportModal type={reportType} securityIntake busy={actionLoading} error={reportError} photoError={photoError} stage={submitStage} progress={photoProgress} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
         {pendingResolution && <ResolutionModal item={pendingResolution} requireChecks notes={resolutionNotes} setNotes={setResolutionNotes} busy={resolutionBusy} error={itemsError} onClose={() => setPendingResolution(null)} onConfirm={(notes, verification) => void resolveItem(pendingResolution.id, notes ?? resolutionNotes, verification)} />}
         {protocolOpen && <ProtocolModal onClose={() => setProtocolOpen(false)} />}
         {userSearchOpen && <UserSearchModal onClose={() => setUserSearchOpen(false)} onSelect={handleUserSelect} />}
@@ -788,8 +758,8 @@ export default function Home() {
 
       <footer className="footer"><span>CampusLink</span><span>Lost and found, together.</span></footer>
 
-      {showReport && <ReportModal type={reportType} busy={actionLoading} error={reportError} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
-      {selectedItem && <ItemModal item={selectedItem} canManage={selectedItem.user_id === user.id} canResolve={selectedItem.user_id === user.id} onClose={() => setSelectedItem(null)} onResolve={requestResolution} onDelete={deleteItem} onUpdate={updateItem} />}
+      {showReport && <ReportModal type={reportType} busy={actionLoading} error={reportError} photoError={photoError} stage={submitStage} progress={photoProgress} onClose={() => setShowReport(false)} onSubmit={submitReport} />}
+      {selectedItem && <ItemModal item={selectedItem} canManage={selectedItem.user_id === user.id} canResolve={selectedItem.user_id === user.id} busy={actionLoading} stage={submitStage} progress={photoProgress} onClose={() => setSelectedItem(null)} onResolve={requestResolution} onDelete={deleteItem} onUpdate={updateItem} />}
       {pendingResolution && <ResolutionModal item={pendingResolution} notes={resolutionNotes} setNotes={setResolutionNotes} busy={resolutionBusy} error={itemsError} onClose={() => setPendingResolution(null)} onConfirm={() => void resolveItem(pendingResolution.id, resolutionNotes)} />}
       {protocolOpen && <ProtocolModal onClose={() => setProtocolOpen(false)} />}
     </main>
@@ -899,31 +869,93 @@ function AccountView({ user, items, contactPreferences, setContactPreferences, o
 
 function Notice({ icon, title, text, time, highlight = false }: { icon: string; title: string; text: string; time: string; highlight?: boolean }) { return <article className={`notice ${highlight ? "highlight" : ""}`}><span className="notice-icon">{icon}</span><div><strong>{title}</strong><p>{text}</p><small>{time}</small></div>{highlight && <b className="unread" />}</article>; }
 
-function ItemCard({ item, onClick }: { item: Item; onClick: () => void }) { return <button className="item-card" onClick={onClick}><span className="item-symbol">{categoryIcon[item.item_category || item.category]}</span><span className="item-content"><strong>{item.title}</strong><span>{item.location} <i>·</i> {formatDate(item.date_event)}</span></span><span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span></button>; }
+function ItemPhoto({ item, className, alt }: { item: Item; className: string; alt: string }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (!item.image_url || failedUrl === item.image_url) {
+    return <span className={className} aria-hidden="true">{categoryIcon[item.item_category || item.category]}</span>;
+  }
+  const imageUrl = item.image_url;
+  return <img className={`${className} has-photo`} src={imageUrl} alt={alt} loading="lazy" decoding="async" onError={() => setFailedUrl(imageUrl)} />;
+}
 
-function ReportModal({ type, securityIntake = false, busy = false, error = "", onClose, onSubmit }: { type: ReportType; securityIntake?: boolean; busy?: boolean; error?: string; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
-  const [photoPreview, setPhotoPreview] = useState("");
-  const [photoName, setPhotoName] = useState("");
-  const photoInputRef = useRef<HTMLInputElement>(null);
+function ItemCard({ item, onClick }: { item: Item; onClick: () => void }) { return <button className="item-card" onClick={onClick}><ItemPhoto item={item} className="item-symbol" alt="" /><span className="item-content"><strong>{item.title}</strong><span>{item.location} <i>·</i> {formatDate(item.date_event)}</span></span><span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span></button>; }
+
+function PhotoPicker({ photo, onChange, disabled = false, stage = "idle", progress = 0, label = "Add an optional photo" }: { photo: PreparedPhoto | null; onChange: (photo: PreparedPhoto | null) => void; disabled?: boolean; stage?: SubmitStage; progress?: number; label?: string }) {
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [error, setError] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const locked = disabled || preparing;
 
   useEffect(() => {
-    if (!photoPreview) return;
-    return () => URL.revokeObjectURL(photoPreview);
-  }, [photoPreview]);
+    if (!photo) return;
+    const previewUrl = photo.previewUrl;
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [photo]);
 
-  function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0];
-    setPhotoPreview(file ? URL.createObjectURL(file) : "");
-    setPhotoName(file?.name || "");
+  async function choose(file: File | undefined) {
+    if (inputRef.current) inputRef.current.value = "";
+    if (!file || locked) return;
+    setError("");
+    setPreparing(true);
+    try {
+      onChange(await preparePhoto(file));
+    } catch (prepareError) {
+      setError(prepareError instanceof Error ? prepareError.message : "This photo could not be prepared.");
+    } finally {
+      setPreparing(false);
+    }
   }
 
-  function removePhoto() {
-    if (photoInputRef.current) photoInputRef.current.value = "";
-    setPhotoPreview("");
-    setPhotoName("");
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setDragging(false);
+    void choose(event.dataTransfer.files[0]);
   }
 
-  return <div className="modal-backdrop"><form className={`modal report-modal ${securityIntake ? "security-intake-modal" : ""}`} onSubmit={onSubmit}>
+  const uploading = stage === "uploading" && Boolean(photo);
+  return <div className="photo-picker">
+    <input ref={inputRef} id={inputId} type="file" accept="image/*" hidden disabled={locked} onChange={(event: ChangeEvent<HTMLInputElement>) => void choose(event.currentTarget.files?.[0])} />
+    {photo ? <div className="photo-upload-preview">
+      <img src={photo.previewUrl} alt="Preview of the selected item photo" />
+      <div className="photo-upload-meta">
+        <strong>{photo.name}</strong>
+        <span>{formatBytes(photo.originalBytes)} → {formatBytes(photo.blob.size)} · location data removed</span>
+        {uploading && <div className="photo-progress" role="progressbar" aria-label="Photo upload progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><span style={{ width: `${progress}%` }} /></div>}
+      </div>
+      {!disabled && <div className="photo-actions">
+        <button type="button" className="photo-change" onClick={() => inputRef.current?.click()}>Change</button>
+        <button type="button" className="photo-remove" onClick={() => onChange(null)} aria-label="Remove selected photo">Remove</button>
+      </div>}
+    </div> : <label htmlFor={inputId} className={`photo-input${dragging ? " dragging" : ""}${locked ? " busy" : ""}`} onDragOver={(event) => { event.preventDefault(); if (!locked) setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={handleDrop}>
+      <span aria-hidden="true">{preparing ? "◌" : "＋"}</span>
+      <b>{preparing ? "Preparing photo…" : label}</b>
+      <small>Drag a photo here or tap to choose · JPEG, PNG, WebP or HEIC</small>
+    </label>}
+    <p className="photo-status" aria-live="polite">{uploading ? `Uploading photo… ${progress}%` : ""}</p>
+    {error && <p className="form-error" role="alert">{error}</p>}
+  </div>;
+}
+
+function ReportModal({ type, securityIntake = false, busy = false, error = "", photoError = "", stage = "idle", progress = 0, onClose, onSubmit }: { type: ReportType; securityIntake?: boolean; busy?: boolean; error?: string; photoError?: string; stage?: SubmitStage; progress?: number; onClose: () => void; onSubmit: (data: FormData, photo: PreparedPhoto | null) => void }) {
+  const [photo, setPhoto] = useState<PreparedPhoto | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    onSubmit(new FormData(event.currentTarget), photo);
+  }
+
+  function submitWithoutPhoto() {
+    const form = formRef.current;
+    if (!form || !form.reportValidity()) return;
+    setPhoto(null);
+    onSubmit(new FormData(form), null);
+  }
+
+  const busyLabel = stage === "uploading" ? `Uploading photo ${progress}%` : "Saving report…";
+  return <div className="modal-backdrop"><form ref={formRef} className={`modal report-modal ${securityIntake ? "security-intake-modal" : ""}`} onSubmit={handleSubmit}>
     <button type="button" className="close report-modal-close" onClick={onClose} aria-label="Close">×</button>
     <p className="eyebrow">{securityIntake ? "CAMPUS SECURITY" : "NEW REPORT"}</p>
     <h2>{securityIntake ? "Log found item" : `Report ${type} item`}</h2>
@@ -940,14 +972,54 @@ function ReportModal({ type, securityIntake = false, busy = false, error = "", o
       <label>{type === "lost" ? "Last seen location" : "Found at"}<select name="location" required defaultValue=""><option value="" disabled>Select a campus location</option><option>Library</option><option>Campus Security Desk</option><option>Student Centre</option><option>Main Quad</option><option>Residence Hall</option><option>Dining Hall</option><option>Lecture Building</option></select></label>
       <label>Date {type === "lost" ? "lost" : "found"}<input name="date_event" type="date" required /></label>
     </>}
-    <label className="photo-input"><span>＋</span> Add an optional photo<input ref={photoInputRef} name="image" type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoChange} /></label>
-    {photoPreview && <div className="photo-upload-preview" role="status"><img src={photoPreview} alt="Selected item" /><span>Photo ready: {photoName}</span><button type="button" className="photo-remove" onClick={removePhoto} aria-label="Remove selected photo">Remove</button></div>}
+    <PhotoPicker photo={photo} onChange={setPhoto} disabled={busy} stage={stage} progress={progress} />
+    {photoError && photo && !busy && <div className="photo-error" role="alert">
+      <p>{photoError} Your report has not been submitted yet.</p>
+      <div><button type="submit" className="button dark">Try again</button><button type="button" className="text-button" onClick={submitWithoutPhoto}>Submit without photo</button></div>
+    </div>}
     {error && <p className="form-error" role="alert">{error}</p>}
-    <button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit" disabled={busy}>{busy ? (photoName ? "Uploading photo…" : "Submitting…") : securityIntake ? "Submit item intake" : `Submit ${type} item report`} {!busy && <span>→</span>}</button>
+    <button className={`button ${type === "lost" ? "dark" : "gold"}`} type="submit" disabled={busy}>{busy ? busyLabel : securityIntake ? "Submit item intake" : `Submit ${type} item report`} {!busy && <span>→</span>}</button>
   </form></div>;
 }
 
-function ItemModal({ item, canManage, canResolve, onClose, onResolve, onDelete, onUpdate }: { item: Item; canManage: boolean; canResolve: boolean; onClose: () => void; onResolve: (item: Item) => void; onDelete: (id: string) => void; onUpdate: (id: string, updates: { title: string; description: string; location: string; date_event: string }) => void }) { const [editing, setEditing] = useState(false); return <div className="modal-backdrop"><div className="modal detail-modal"><button className="close" onClick={onClose}>×</button>{item.image_url ? <img className="detail-image" src={item.image_url} alt={item.title} /> : <div className="detail-image">{categoryIcon[item.item_category || item.category]}</div>}<span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span>{editing ? <form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); onUpdate(item.id, { title: String(data.get("title")), description: String(data.get("description")), location: String(data.get("location")), date_event: String(data.get("date_event")) }); setEditing(false); }}><label>Title<input name="title" defaultValue={item.title} required /></label><label>Description<textarea name="description" defaultValue={item.description} required /></label><label>Location<input name="location" defaultValue={item.location} required /></label><label>Date<input name="date_event" type="date" defaultValue={item.date_event} required /></label><button className="button dark" type="submit">Save changes</button></form> : <><h2>{item.title}</h2><p className="detail-category">{item.category === "lost" ? "Lost item" : "Found item"} · Reported by {item.reporter || "Campus user"}</p><p>{item.description}</p><div className="detail-meta"><span>⌖ <b>Location</b> {item.location}</span><span>▣ <b>Date</b> {formatDate(item.date_event)}</span></div><p className="privacy-note">Bring your student card and proof of ownership to Campus Security.</p>{item.status === "active" && canResolve && <button className="button dark" onClick={() => onResolve(item)}>Mark as resolved</button>}{item.status === "active" && canManage && <div className="detail-actions"><button className="button gold" onClick={() => setEditing(true)}>Edit report</button><button className="text-button" onClick={() => onDelete(item.id)}>Delete report</button></div>}</>}</div></div>; }
+function ItemModal({ item, canManage, canResolve, busy = false, stage = "idle", progress = 0, onClose, onResolve, onDelete, onUpdate }: { item: Item; canManage: boolean; canResolve: boolean; busy?: boolean; stage?: SubmitStage; progress?: number; onClose: () => void; onResolve: (item: Item) => void; onDelete: (id: string) => void; onUpdate: (id: string, updates: ItemUpdates, photoChange: PhotoChange) => Promise<string | null> }) {
+  const [editing, setEditing] = useState(false);
+  const [photoChange, setPhotoChange] = useState<PhotoChange>({ kind: "keep" });
+  const [editError, setEditError] = useState("");
+
+  function stopEditing() {
+    setEditing(false);
+    setPhotoChange({ kind: "keep" });
+    setEditError("");
+  }
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    const data = new FormData(event.currentTarget);
+    setEditError("");
+    const failure = await onUpdate(item.id, { title: String(data.get("title")), description: String(data.get("description")), location: String(data.get("location")), date_event: String(data.get("date_event")) }, photoChange);
+    if (failure) setEditError(failure);
+    else stopEditing();
+  }
+
+  const replacement = photoChange.kind === "replace" ? photoChange.photo : null;
+  const savingLabel = stage === "uploading" ? `Uploading photo ${progress}%` : "Saving…";
+  return <div className="modal-backdrop"><div className="modal detail-modal"><button className="close" onClick={onClose} aria-label="Close">×</button>
+    <ItemPhoto item={item} className="detail-image" alt={item.title} />
+    <span className={`status ${item.status}`}>{item.status === "resolved" ? "Resolved" : item.category === "lost" ? "Lost" : "Found"}</span>
+    {editing ? <form onSubmit={handleSave}>
+      <label>Title<input name="title" defaultValue={item.title} required /></label>
+      <label>Description<textarea name="description" defaultValue={item.description} required /></label>
+      <label>Location<input name="location" defaultValue={item.location} required /></label>
+      <label>Date<input name="date_event" type="date" defaultValue={item.date_event} required /></label>
+      <PhotoPicker photo={replacement} onChange={(photo) => setPhotoChange(photo ? { kind: "replace", photo } : { kind: "keep" })} disabled={busy} stage={stage} progress={progress} label={item.image_url ? "Replace photo" : "Add a photo"} />
+      {item.image_url && !replacement && <label className="photo-remove-toggle"><input type="checkbox" checked={photoChange.kind === "remove"} disabled={busy} onChange={(event) => setPhotoChange(event.target.checked ? { kind: "remove" } : { kind: "keep" })} /> Remove the current photo</label>}
+      {editError && <p className="form-error" role="alert">{editError}</p>}
+      <div className="detail-actions"><button className="button dark" type="submit" disabled={busy}>{busy ? savingLabel : "Save changes"}</button><button type="button" className="text-button" onClick={stopEditing} disabled={busy}>Cancel</button></div>
+    </form> : <><h2>{item.title}</h2><p className="detail-category">{item.category === "lost" ? "Lost item" : "Found item"} · Reported by {item.reporter || "Campus user"}</p><p>{item.description}</p><div className="detail-meta"><span>⌖ <b>Location</b> {item.location}</span><span>▣ <b>Date</b> {formatDate(item.date_event)}</span></div><p className="privacy-note">Bring your student card and proof of ownership to Campus Security.</p>{item.status === "active" && canResolve && <button className="button dark" onClick={() => onResolve(item)}>Mark as resolved</button>}{item.status === "active" && canManage && <div className="detail-actions"><button className="button gold" onClick={() => setEditing(true)}>Edit report</button><button className="text-button" onClick={() => onDelete(item.id)}>Delete report</button></div>}</>}
+  </div></div>;
+}
 
 function ResolutionModal({ item, requireChecks = false, notes, setNotes, busy, error, onClose, onConfirm }: { item: Item; requireChecks?: boolean; notes: string; setNotes: (value: string) => void; busy: boolean; error: string; onClose: () => void; onConfirm: (notes?: string, verification?: ReleaseVerification) => void }) {
   const [checks, setChecks] = useState({ studentId: false, ownership: false, condition: false });

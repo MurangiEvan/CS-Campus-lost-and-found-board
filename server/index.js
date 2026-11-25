@@ -3,6 +3,7 @@ require('dotenv').config();
 const app = require('./server');
 const { initializeDatabase } = require('./config/db');
 const objectStorage = require('./services/object-storage');
+const { startUploadCleanup } = require('./jobs/upload-cleanup-scheduler');
 
 const PORT = process.env.PORT || 3001;
 
@@ -15,6 +16,7 @@ async function startServer() {
       : uploadConfig.error;
     console.warn(`[Storage] Image uploads are unavailable: ${details}`);
   }
+  startUploadCleanup();
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });

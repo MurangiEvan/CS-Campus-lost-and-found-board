@@ -8,6 +8,8 @@ const allowedTypes = new Map([
   ['image/webp', 'webp'],
 ]);
 const defaultMaxBytes = 5 * 1024 * 1024;
+// Permanent keys are random UUIDs and never overwritten, so browsers/CDNs may cache them forever.
+const permanentCacheControl = 'public, max-age=31536000, immutable';
 const requiredSettings = ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_PUBLIC_BASE_URL'];
 let cachedClient;
 
@@ -170,6 +172,7 @@ async function finalizeUploadedObject({ key, contentType, size }) {
     Key: permanentKey,
     CopySource: copySource,
     ContentType: contentType,
+    CacheControl: permanentCacheControl,
     MetadataDirective: 'REPLACE',
   }));
   try {
@@ -195,4 +198,4 @@ async function deleteImageUrl(imageUrl, ownerId) {
   return true;
 }
 
-module.exports = { getConfigurationStatus, validateUpload, createUpload, hasSupportedImageSignature, publicUrlForKey, keyFromPublicUrl, isManagedObjectKey, finalizeUploadedObject, deleteObject, deleteImageUrl };
+module.exports = { permanentCacheControl, getConfigurationStatus, validateUpload, createUpload, hasSupportedImageSignature, publicUrlForKey, keyFromPublicUrl, isManagedObjectKey, finalizeUploadedObject, deleteObject, deleteImageUrl };
